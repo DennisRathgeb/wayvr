@@ -97,6 +97,7 @@ pub fn new_mirror(name: Arc<str>, app: &mut AppState) -> anyhow::Result<OverlayW
     let params = ScreenCastParams {
         token: None,
         embed_mouse: true,
+        cursor_metadata: false,
         screens_only: false,
         persist: false,
         allow_multiple: false,

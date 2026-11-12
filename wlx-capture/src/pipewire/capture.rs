@@ -1,6 +1,7 @@
 use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::mpsc;
 use std::thread::JoinHandle;
 
@@ -66,6 +67,8 @@ where
     data: Option<CaptureData<R>>,
     node_id: u32,
     handle: Option<JoinHandle<Result<(), Error>>>,
+    /// Latest cursor position from the stream's cursor metadata
+    cursor: Arc<Mutex<Option<MouseMeta>>>,
 }
 
 impl<R> PipewireCapture<R>
@@ -78,6 +81,7 @@ where
             data: None,
             node_id,
             handle: None,
+            cursor: Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -116,11 +120,13 @@ where
             let name = self.name.clone();
             let node_id = self.node_id;
             let formats = dmabuf_formats.to_vec();
+            let cursor = self.cursor.clone();
 
             move || {
                 main_loop::<U, R>(
                     name,
                     node_id,
+                    cursor,
                     formats,
                     tx_frame,
                     rx_ctrl,
@@ -168,12 +174,16 @@ where
             }
         }
     }
+    fn cursor(&self) -> Option<MouseMeta> {
+        self.cursor.lock().ok().and_then(|c| c.clone())
+    }
     fn request_new_frame(&mut self) {}
 }
 
 fn main_loop<U, R>(
     name: Arc<str>,
     node_id: u32,
+    cursor: Arc<Mutex<Option<MouseMeta>>>,
     dmabuf_formats: Vec<DrmFormat>,
     sender: mpsc::SyncSender<R>,
     receiver: pw::channel::Receiver<PwChangeRequest>,
@@ -267,7 +277,17 @@ where
                 .unwrap(); // want panic
                 let xform_pod = Pod::from_bytes(&xform_bytes).unwrap(); // want panic
 
-                let mut pods = [params_pod, header_pod, xform_pod];
+                // cursor position (and room for a 64x64 bitmap, which we do not use)
+                let cursor_bytes = obj_to_bytes(get_meta_object(
+                    spa::sys::SPA_META_Cursor,
+                    std::mem::size_of::<spa::sys::spa_meta_cursor>()
+                        + std::mem::size_of::<spa::sys::spa_meta_bitmap>()
+                        + 64 * 64 * 4,
+                ))
+                .unwrap(); // want panic
+                let cursor_pod = Pod::from_bytes(&cursor_bytes).unwrap(); // want panic
+
+                let mut pods = [params_pod, header_pod, xform_pod, cursor_pod];
                 if let Err(e) = stream.update_params(&mut pods) {
                     log::error!("{}: failed to update params: {}", name, e);
                 }
@@ -284,10 +304,23 @@ where
                 }
 
                 if let Some(mut buffer) = maybe_buffer {
+                    // The cursor comes with every buffer, also with the picture-less ones the
+                    // compositor sends when only the cursor moved.
+                    if let Some(c) = buffer.find_meta::<MetaCursor>()
+                        && let Ok(mut cur) = cursor.lock()
+                    {
+                        *cur = (c.is_valid() && format.width > 0 && format.height > 0).then(|| {
+                            MouseMeta {
+                                x: c.position().x as f32 / format.width as f32,
+                                y: c.position().y as f32 / format.height as f32,
+                            }
+                        });
+                    }
+
                     if let Some(header) = buffer.find_meta::<MetaHeader>()
                         && header.flags().contains(MetaHeaderFlags::CORRUPTED)
                     {
-                        log::warn!("{}: PipeWire buffer is corrupt.", name);
+                        log::trace!("{}: PipeWire buffer without a picture.", name);
                         return;
                     }
 

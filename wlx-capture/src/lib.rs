@@ -34,4 +34,9 @@ pub trait WlxCapture<U, R> {
     fn pause(&mut self);
     fn resume(&mut self);
     fn request_new_frame(&mut self);
+    /// Where the desktop cursor is on this source (0..1), when the source reports it apart from
+    /// the picture (PipeWire cursor metadata). Updated also while the picture does not change.
+    fn cursor(&self) -> Option<frame::MouseMeta> {
+        None
+    }
 }

@@ -47,6 +47,9 @@ pub struct ScreenCastParams {
 
     /// If true, use the first available: EMBEDDED, METADATA/FALLBACK, HIDDEN.
     pub embed_mouse: bool,
+    /// Ask for the cursor as metadata (position apart from the picture) instead of embedded
+    /// or hidden; the consumer draws it (see `WlxCapture::cursor`).
+    pub cursor_metadata: bool,
 
     /// false: only request MONITOR
     /// true: request MONITOR, WINDOW, VIRTUAL
@@ -495,7 +498,9 @@ impl ScreenCastManager {
                     });
                 }
 
-                let cursor_mode = choose_cursor_mode(globals.cursor_modes, params.embed_mouse)
+                let cursor_mode = Some(CURSOR_METADATA)
+                    .filter(|m| params.cursor_metadata && globals.cursor_modes & m != 0)
+                    .or_else(|| choose_cursor_mode(globals.cursor_modes, params.embed_mouse))
                     .ok_or(ScreenCastError::UnsupportedCursorMode {
                         available: globals.cursor_modes,
                     })?;

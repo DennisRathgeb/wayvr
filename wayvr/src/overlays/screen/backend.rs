@@ -52,6 +52,8 @@ pub struct ScreenBackend {
     capture: Box<dyn WlxCapture<WlxCaptureIn, WlxCaptureOut>>,
     pipeline: Option<ScreenPipeline>,
     cur_frame: Option<WlxCaptureOut>,
+    /// The cursor as drawn last, to redraw when it moved over an unchanged picture
+    drawn_cursor: Option<wlx_capture::frame::MouseMeta>,
     meta: Option<FrameMeta>,
     mouse_transform: Affine2,
     interaction_transform: Option<Affine2>,
@@ -77,6 +79,7 @@ impl ScreenBackend {
             capture,
             pipeline: None,
             cur_frame: None,
+            drawn_cursor: None,
             meta: None,
             mouse_transform: Affine2::ZERO,
             interaction_transform: None,
@@ -251,7 +254,9 @@ impl OverlayBackend for ScreenBackend {
 
             Ok(ShouldRender::Should)
         } else if self.cur_frame.is_some() {
-            if self.just_resumed {
+            if self.capture.cursor() != self.drawn_cursor {
+                Ok(ShouldRender::Should)
+            } else if self.just_resumed {
                 self.just_resumed = false;
                 Ok(ShouldRender::Should)
             } else {
@@ -268,10 +273,12 @@ impl OverlayBackend for ScreenBackend {
         let image = capture.image.clone();
 
         // want panic; must be Some if cur_frame is also Some
+        let cursor = self.capture.cursor().or_else(|| capture.mouse.clone());
         self.pipeline
             .as_mut()
             .unwrap()
-            .render(image, capture.mouse.as_ref(), app, rdr)?;
+            .render(image, cursor.as_ref(), app, rdr)?;
+        self.drawn_cursor = self.capture.cursor();
         self.capture.request_new_frame();
         Ok(())
     }
