@@ -356,6 +356,10 @@ impl Connection {
         params.signals.send(WayVRSignal::ShowHide);
     }
 
+    fn handle_wlx_reset_screens(params: &mut TickParams) {
+        params.signals.send(WayVRSignal::ResetScreens);
+    }
+
     fn handle_wlx_switch_set(params: &mut TickParams, set: Option<usize>) {
         params.signals.send(WayVRSignal::SwitchSet(set));
     }
@@ -437,6 +441,9 @@ impl Connection {
             }
             PacketClient::WlxShowHide => {
                 Self::handle_wlx_show_hide(params);
+            }
+            PacketClient::WlxResetScreens => {
+                Self::handle_wlx_reset_screens(params);
             }
             PacketClient::WlxSwitchSet(set) => {
                 Self::handle_wlx_switch_set(params, set);

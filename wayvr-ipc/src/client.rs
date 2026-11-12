@@ -421,6 +421,11 @@ impl WayVRClient {
 		Ok(())
 	}
 
+	pub async fn fn_wlx_reset_screens(client: WayVRClientMutex) -> anyhow::Result<()> {
+		send_only!(client, &PacketClient::WlxResetScreens);
+		Ok(())
+	}
+
 	pub async fn fn_wlx_switch_set(
 		client: WayVRClientMutex,
 		set: Option<usize>,

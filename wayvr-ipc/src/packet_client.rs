@@ -98,4 +98,6 @@ pub enum PacketClient {
 	WlxShowHide,
 	WlxSwitchSet(Option<usize>),
 	WlxHandsfree(HandsfreeParams),
+	/// Put all screens back where they are by default (side by side, in front of the viewer)
+	WlxResetScreens,
 }

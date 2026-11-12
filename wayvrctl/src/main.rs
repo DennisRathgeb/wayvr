@@ -16,7 +16,7 @@ use wayvr_ipc::{
 
 use crate::helper::{
     WayVRClientState, wlr_input_capture, wlx_device_haptics, wlx_handsfree, wlx_input_state,
-    wlx_panel_modify, wlx_show_hide, wlx_switch_set, wvr_process_get, wvr_process_launch,
+    wlx_panel_modify, wlx_reset_screens, wlx_show_hide, wlx_switch_set, wvr_process_get, wvr_process_launch,
     wvr_process_list, wvr_process_terminate, wvr_window_list, wvr_window_set_visible,
 };
 
@@ -171,6 +171,9 @@ async fn run_once(state: &mut WayVRClientState, args: Args) -> anyhow::Result<()
         Subcommands::ShowHide => {
             wlx_show_hide(state).await;
         }
+        Subcommands::ResetScreens => {
+            wlx_reset_screens(state).await;
+        }
         Subcommands::PanelModify {
             overlay,
             element,
@@ -288,6 +291,8 @@ enum Subcommands {
     },
     /// Toggle overlay show or hide
     ShowHide,
+    /// Put all screens back where they are by default, side by side in front of you
+    ResetScreens,
     /// Apply a modification to a panel element
     PanelModify {
         /// The name of the overlay (XML file name without extension)
