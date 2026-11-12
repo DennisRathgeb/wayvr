@@ -155,6 +155,16 @@ where
 
         // overwrite default layout with saved layout, if exists
         me.restore_layout(app);
+
+        // A real keyboard is in use: the on-screen one starts hidden in every set, also when a
+        // saved layout had it open. It can still be toggled.
+        let keyboard_id = me.keyboard_id;
+        for set in &mut me.sets {
+            set.overlays.remove(keyboard_id);
+        }
+        if let Some(keyboard) = me.mut_by_id(keyboard_id) {
+            keyboard.config.deactivate();
+        }
         me.overlays_changed(app)?;
 
         // recreate saved passthru overlays

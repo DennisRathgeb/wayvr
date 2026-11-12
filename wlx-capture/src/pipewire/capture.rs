@@ -336,6 +336,20 @@ where
                         && let Some(image) = cursor_image_from_meta(c, format)
                         && let Ok(mut cur) = cursor_image.lock()
                     {
+                        log::debug!(
+                            "{}: cursor picture {}x{}",
+                            name,
+                            image.width,
+                            image.height
+                        );
+                        if cur.is_none() {
+                            log::info!(
+                                "{}: first cursor picture, {}x{}",
+                                name,
+                                image.width,
+                                image.height
+                            );
+                        }
                         *cur = Some(Arc::new(image));
                     }
                     if let Some(c) = cursor_meta
