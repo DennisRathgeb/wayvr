@@ -60,6 +60,9 @@ pub enum CapturedEvent {
     },
     Grabbed,
     Ungrabbed,
+    /// Meta+Alt held with nothing else (true) or no longer (false), grabbed or not: the
+    /// screens are carried with the head meanwhile
+    Carry(bool),
     /// Wheel with Meta+Alt held, grabbed or not: all screens nearer (positive) or farther
     PushAll {
         notches: f32,
@@ -579,6 +582,29 @@ fn process_libinput_event(par: ProcessLibinputEventParams) -> ProcessResult {
             } else {
                 state.pressed_keys.remove(&code);
             }
+
+            // Meta+Alt and nothing else, over all keyboards
+            {
+                static CARRY: std::sync::atomic::AtomicBool =
+                    std::sync::atomic::AtomicBool::new(false);
+                let all = || par.runtime_devices.values().map(|s| &s.pressed_keys);
+                let only_mods = all().flatten().all(|k| {
+                    [
+                        KeyCode::KEY_LEFTMETA.0,
+                        KeyCode::KEY_RIGHTMETA.0,
+                        KeyCode::KEY_LEFTALT.0,
+                        KeyCode::KEY_RIGHTALT.0,
+                    ]
+                    .contains(k)
+                });
+                let carry = only_mods && all().any(mod_super) && all().any(mod_alt);
+                if CARRY.swap(carry, std::sync::atomic::Ordering::Relaxed) != carry
+                    && par.event_tx.send(CapturedEvent::Carry(carry)).is_err()
+                {
+                    return ProcessResult::ReceiverGone;
+                }
+            }
+            let state = par.runtime_devices.entry(event.device()).or_default();
 
             if !par.grabbed {
                 // while ungrabbed, arm an automatic grab that triggers after release

@@ -951,6 +951,9 @@ impl WvrServerState {
                         hid_wrapper.inner.wheel(delta);
                     }
                 }
+                input_capture::CapturedEvent::Carry(on) => {
+                    input_state.carry = on.then(|| (Instant::now(), None));
+                }
                 input_capture::CapturedEvent::PushAll { notches } => {
                     input_state.mouse_ray.push_all += notches;
                 }

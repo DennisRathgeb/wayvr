@@ -109,6 +109,9 @@ pub struct InputState {
     pub devices: Vec<TrackedDevice>,
     pub handsfree_state: PointerState,
     pub mouse_ray: MouseRay,
+    /// While Meta+Alt is held: since when, and (once it has started) the anchor relative to the
+    /// head. All anchored panels are carried with the head as one rigid group.
+    pub carry: Option<(Instant, Option<Affine3A>)>,
     /// Mirrored from the overlay manager every frame, so input routing can see it.
     pub edit_mode: bool,
     pub picking_focus: FocusPickState,
@@ -126,6 +129,7 @@ impl InputState {
             processes: Vec::new(),
             handsfree_state: PointerState::default(),
             mouse_ray: MouseRay::default(),
+            carry: None,
             edit_mode: false,
             picking_focus: FocusPickState::None,
             disable_lerp_until: Instant::now(),
@@ -509,6 +513,26 @@ where
     O: Default,
 {
     app.input_state.edit_mode = overlays.get_edit_mode();
+
+    // Meta+Alt held: after a moment (so a quick shortcut does not nudge anything) the anchor is
+    // fixed to the head, and every anchored panel follows it, keeping its place in the group.
+    if let Some((since, rel)) = app.input_state.carry.as_mut()
+        && since.elapsed() > Duration::from_millis(250)
+    {
+        let hmd = app.input_state.hmd;
+        let rel = *rel.get_or_insert_with(|| hmd.inverse() * app.anchor);
+        app.anchor = hmd * rel;
+        for overlay in overlays.values_mut() {
+            if overlay
+                .config
+                .active_state
+                .as_ref()
+                .is_some_and(|s| matches!(s.positioning, Positioning::Anchored))
+            {
+                overlay.config.reset(app, false);
+            }
+        }
+    }
 
     let push_all = std::mem::take(&mut app.input_state.mouse_ray.push_all);
     if push_all.abs() > 0.1 {
