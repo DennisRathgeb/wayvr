@@ -59,6 +59,8 @@ pub struct AppState {
 
     pub input_state: InputState,
     pub screens: SmallVec<[ScreenMeta; 8]>,
+    /// The latest picture of each mirrored screen, for the region panels cut from it.
+    pub screen_frames: std::collections::HashMap<Arc<str>, crate::overlays::region::ScreenFrame>,
     pub anchor: Affine3A,
     pub anchor_grabbed: bool,
 
@@ -203,6 +205,7 @@ impl AppState {
             wgui_shared,
             input_state: InputState::new(),
             screens: smallvec![],
+            screen_frames: std::collections::HashMap::new(),
             anchor: Affine3A::IDENTITY,
             anchor_grabbed: false,
             wgui_theme: Rc::new(theme),

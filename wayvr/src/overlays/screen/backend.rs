@@ -29,11 +29,11 @@ use super::capture::{ScreenPipeline, WlxCaptureIn, WlxCaptureOut, receive_callba
 static START: LazyLock<Instant> = LazyLock::new(Instant::now);
 static NEXT_MOVE: AtomicU64 = AtomicU64::new(0);
 
-fn can_move() -> bool {
+pub(crate) fn can_move() -> bool {
     START.elapsed().as_millis() as u64 > NEXT_MOVE.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-fn set_next_move(millis_from_now: u64) {
+pub(crate) fn set_next_move(millis_from_now: u64) {
     NEXT_MOVE.store(
         START.elapsed().as_millis() as u64 + millis_from_now,
         std::sync::atomic::Ordering::Relaxed,
@@ -283,6 +283,20 @@ impl OverlayBackend for ScreenBackend {
 
         // want panic; must be Some if cur_frame is also Some
         let cursor = self.capture.cursor().or_else(|| capture.mouse.clone());
+        // for the region panels cut from this screen
+        app.screen_frames.insert(
+            self.name.clone(),
+            crate::overlays::region::ScreenFrame {
+                image: image.clone(),
+                cursor: cursor.as_ref().map(|c| (c.x, c.y)),
+                logical: [
+                    self.logical_pos.x,
+                    self.logical_pos.y,
+                    self.logical_size.x,
+                    self.logical_size.y,
+                ],
+            },
+        );
         let pipeline = self.pipeline.as_mut().unwrap();
         if let Some(cursor_image) = self.capture.cursor_image() {
             pipeline.set_cursor_image(app, cursor_image)?;

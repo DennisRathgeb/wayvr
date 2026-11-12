@@ -430,7 +430,7 @@ pub fn openxr_run(args: &Args, params: RunParams) -> Result<(), BackendError> {
             log::error!("WayVR IPC tick_events failed: {e:?}");
         }
 
-        layout_file::tick(&app, &overlays, cur_frame as usize);
+        layout_file::tick(&mut app, &overlays, cur_frame as usize);
 
         // Begin rendering
         let mut futures = GpuFutures::default();
