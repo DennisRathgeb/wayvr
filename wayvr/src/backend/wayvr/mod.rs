@@ -954,6 +954,9 @@ impl WvrServerState {
                 input_capture::CapturedEvent::Carry(on) => {
                     input_state.carry = on.then(|| (Instant::now(), None));
                 }
+                input_capture::CapturedEvent::ScaleAll { steps } => {
+                    input_state.mouse_ray.scale_all += steps;
+                }
                 input_capture::CapturedEvent::PushAll { notches } => {
                     input_state.mouse_ray.push_all += notches;
                 }

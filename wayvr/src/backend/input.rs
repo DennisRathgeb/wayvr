@@ -77,8 +77,10 @@ pub struct MouseRay {
     /// Wheel notches since the last frame (positive = wheel up = nearer); consumed once a frame
     /// to push or pull the panel under the pointer.
     pub push: f32,
-    /// The same for all screens at once (wheel with Meta+Alt+Space held).
+    /// The same for all screens at once (wheel with Meta+Alt held).
     pub push_all: f32,
+    /// Steps to make all screens larger (positive) or smaller (Meta+Alt+Up / Down).
+    pub scale_all: f32,
 }
 
 impl MouseRay {
@@ -538,8 +540,14 @@ where
     // farther. It moves as one piece (the anchor moves), so the screens keep their spacing and
     // their angles to each other.
     let push_all = std::mem::take(&mut app.input_state.mouse_ray.push_all);
-    if push_all.abs() > 0.1 {
+    let scale_all = std::mem::take(&mut app.input_state.mouse_ray.scale_all);
+    if push_all.abs() > 0.1 || scale_all.abs() > 0.1 {
         let hmd = app.input_state.hmd;
+        // Meta+Alt+Up / Down: the group grows or shrinks about its anchor, 8 % a step, so the
+        // screens stay side by side without gaps opening or closing
+        let scale = app.anchor.matrix3.x_axis.length();
+        let new_scale = (scale * 1.08f32.powf(scale_all)).clamp(0.3, 4.0);
+        app.anchor.matrix3 = app.anchor.matrix3.mul_scalar(new_scale / scale);
         let forward = hmd.transform_vector3a(Vec3A::NEG_Z).normalize_or_zero();
         let dist = (app.anchor.translation - hmd.translation).dot(forward).clamp(0.3, 6.0);
         let new_dist = (dist * (1.0 - 0.08 * push_all)).clamp(0.3, 6.0);

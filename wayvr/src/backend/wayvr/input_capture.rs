@@ -63,6 +63,10 @@ pub enum CapturedEvent {
     /// Meta+Alt held with nothing else (true) or no longer (false), grabbed or not: the
     /// screens are carried with the head meanwhile
     Carry(bool),
+    /// Meta+Alt+Up / Down, grabbed or not: all screens larger (positive) or smaller
+    ScaleAll {
+        steps: f32,
+    },
     /// Wheel with Meta+Alt held, grabbed or not: all screens nearer (positive) or farther
     PushAll {
         notches: f32,
@@ -603,6 +607,19 @@ fn process_libinput_event(par: ProcessLibinputEventParams) -> ProcessResult {
                 {
                     return ProcessResult::ReceiverGone;
                 }
+            }
+            if pressed
+                && (code == KeyCode::KEY_UP.0 || code == KeyCode::KEY_DOWN.0)
+                && par.runtime_devices.values().any(|s| mod_super(&s.pressed_keys))
+                && par.runtime_devices.values().any(|s| mod_alt(&s.pressed_keys))
+                && par
+                    .event_tx
+                    .send(CapturedEvent::ScaleAll {
+                        steps: if code == KeyCode::KEY_UP.0 { 1.0 } else { -1.0 },
+                    })
+                    .is_err()
+            {
+                return ProcessResult::ReceiverGone;
             }
             let state = par.runtime_devices.entry(event.device()).or_default();
 
