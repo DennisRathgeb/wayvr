@@ -60,6 +60,10 @@ pub enum CapturedEvent {
     },
     Grabbed,
     Ungrabbed,
+    /// Wheel with Meta+Alt held, grabbed or not: all screens nearer (positive) or farther
+    PushAll {
+        notches: f32,
+    },
     KeyCombo {
         combo: KeyCombo,
         pressed: bool,
@@ -661,6 +665,30 @@ fn process_libinput_event(par: ProcessLibinputEventParams) -> ProcessResult {
                     pressed,
                 })
                 .is_err()
+            {
+                return ProcessResult::ReceiverGone;
+            }
+        }
+        Event::Pointer(PointerEvent::ScrollWheel(event))
+            if par
+                .runtime_devices
+                .values()
+                .any(|s| mod_super(&s.pressed_keys))
+                && par.runtime_devices.values().any(|s| mod_alt(&s.pressed_keys)) =>
+        {
+            // Meta+Alt+wheel works without a grab too: the devices are read all the time
+            let vertical = if event.has_axis(Axis::Vertical) {
+                event.scroll_value_v120(Axis::Vertical)
+            } else {
+                0.0
+            };
+            if vertical != 0.0
+                && par
+                    .event_tx
+                    .send(CapturedEvent::PushAll {
+                        notches: -(vertical as f32) / 120.0,
+                    })
+                    .is_err()
             {
                 return ProcessResult::ReceiverGone;
             }

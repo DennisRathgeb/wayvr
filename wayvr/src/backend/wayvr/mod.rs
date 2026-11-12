@@ -944,22 +944,15 @@ impl WvrServerState {
                     } else if self.has_input_focus {
                         self.manager.send_pointer_axis_wheel_raw(delta);
                     } else if matches!(config.handsfree_pointer, HandsfreePointer::Mouse) {
-                        // wheel notches move the panel under the pointer: up = nearer.
-                        // With Meta+Alt+Space held (evdev 125/126, 56/100, 57): all screens.
-                        let k = &self.capture_keys;
-                        let all = (k.contains(&125) || k.contains(&126))
-                            && (k.contains(&56) || k.contains(&100))
-                            && k.contains(&57);
-                        let notches = vertical_v120 as f32 / 120.0;
-                        if all {
-                            input_state.mouse_ray.push_all -= notches;
-                        } else {
-                            input_state.mouse_ray.push -= notches;
-                        }
+                        // wheel notches move the panel under the pointer: up = nearer
+                        input_state.mouse_ray.push -= vertical_v120 as f32 / 120.0;
                     } else {
                         delta.y *= -1.0;
                         hid_wrapper.inner.wheel(delta);
                     }
+                }
+                input_capture::CapturedEvent::PushAll { notches } => {
+                    input_state.mouse_ray.push_all += notches;
                 }
                 input_capture::CapturedEvent::Grabbed => {
                     audio_sample_player.play_sample(audio_system, "input_grab");
