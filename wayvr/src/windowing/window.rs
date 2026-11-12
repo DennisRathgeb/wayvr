@@ -259,10 +259,22 @@ impl OverlayWindowConfig {
 }
 
 pub fn realign(transform: &mut Affine3A, hmd: &Affine3A, scale: f32, snap_angle: f32) {
+    realign_roll(transform, hmd, scale, snap_angle, false);
+}
+
+/// Like `realign`; with `head_roll` the panel's side tilt follows the head continuously instead
+/// of staying upright until the head is tilted far enough to snap.
+pub fn realign_roll(
+    transform: &mut Affine3A,
+    hmd: &Affine3A,
+    scale: f32,
+    snap_angle: f32,
+    head_roll: bool,
+) {
     let to_hmd = hmd.translation - transform.translation;
     let up_dir: Vec3A;
 
-    if hmd.x_axis.dot(Vec3A::Y).abs() > 0.2 {
+    if head_roll || hmd.x_axis.dot(Vec3A::Y).abs() > 0.2 {
         // Snap upright
         up_dir = hmd.y_axis;
     } else {

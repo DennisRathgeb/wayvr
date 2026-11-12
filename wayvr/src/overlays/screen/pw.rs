@@ -92,7 +92,8 @@ impl ScreenCastBackend {
 
         let params = ScreenCastParams {
             token,
-            embed_mouse: true,
+            // KWin's embedded cursor is missing from the stream; with metadata we draw it
+            embed_mouse: false,
             screens_only: true,
             persist: true,
             allow_multiple: false,

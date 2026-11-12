@@ -20,7 +20,9 @@ use crate::subsystem::hid::WheelDelta;
 use crate::subsystem::input::InputFocus;
 use crate::windowing::backend::OverlayEventData;
 use crate::windowing::manager::OverlayWindowManager;
-use crate::windowing::window::{self, OverlayCategory, OverlayWindowData, realign, scalar_scale};
+use crate::windowing::window::{
+    self, OverlayCategory, OverlayWindowData, realign, realign_roll, scalar_scale,
+};
 use crate::windowing::{OverlayID, OverlaySelector};
 
 use super::task::TaskType;
@@ -75,6 +77,8 @@ pub struct MouseRay {
     /// Wheel notches since the last frame (positive = wheel up = nearer); consumed once a frame
     /// to push or pull the panel under the pointer.
     pub push: f32,
+    /// The same for all screens at once (wheel with Meta+Alt+Space held).
+    pub push_all: f32,
 }
 
 impl MouseRay {
@@ -505,6 +509,18 @@ where
     O: Default,
 {
     app.input_state.edit_mode = overlays.get_edit_mode();
+
+    let push_all = std::mem::take(&mut app.input_state.mouse_ray.push_all);
+    if push_all.abs() > 0.1 {
+        let hmd = app.input_state.hmd;
+        for overlay in overlays.values_mut() {
+            if overlay.config.category == OverlayCategory::Screen
+                && let Some(state) = overlay.config.active_state.as_mut()
+            {
+                push_pull_from_head(&mut state.transform, &hmd, push_all);
+            }
+        }
+    }
 
     let hits = if app.input_state.pointers[1].last_click > app.input_state.pointers[0].last_click {
         let right = interact_hand(1, overlays, app);
@@ -1070,11 +1086,12 @@ where
                 let scale = scalar_scale(&overlay_state.transform);
                 overlay_state.transform.translation =
                     pointer.pose.transform_point3a(grab_data.offset.translation);
-                realign(
+                realign_roll(
                     &mut overlay_state.transform,
                     &app.input_state.hmd,
                     scale,
                     app.session.config.snap_angle_deg,
+                    pointer.mouse, // dragged with the mouse: the side tilt is the head's
                 );
             }
             overlay.config.pause_movement = true;

@@ -153,6 +153,8 @@ pub struct WvrServerState {
     pointer_before_capture: Option<HandsfreePointer>,
     /// Children of the capture hook (WAYVR_CAPTURE_HOOK), reaped on the next hook call
     hook_children: Vec<std::process::Child>,
+    /// Keys held while the input is captured (evdev codes)
+    capture_keys: HashSet<u16>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -313,6 +315,7 @@ impl WvrServerState {
             grab_toast_sent: false,
             pointer_before_capture: None,
             hook_children: Vec::new(),
+            capture_keys: HashSet::new(),
         })
     }
 
@@ -821,6 +824,16 @@ impl WvrServerState {
         for ev in input_capture.drain_events() {
             match ev {
                 input_capture::CapturedEvent::Key { code, pressed } => {
+                    if pressed {
+                        self.capture_keys.insert(code);
+                    } else {
+                        self.capture_keys.remove(&code);
+                    }
+                    if matches!(config.handsfree_pointer, HandsfreePointer::Mouse) {
+                        // edit mode: the keyboard is not for the desktop (held keys only
+                        // modify the wheel)
+                        continue;
+                    }
                     let vk = (code as u32) + 8;
                     if input_state.picking_focus.is_aiming() {
                         if (hid::VirtualKey::Q as u32) == vk {
@@ -931,8 +944,18 @@ impl WvrServerState {
                     } else if self.has_input_focus {
                         self.manager.send_pointer_axis_wheel_raw(delta);
                     } else if matches!(config.handsfree_pointer, HandsfreePointer::Mouse) {
-                        // wheel notches move the panel under the pointer: up = nearer
-                        input_state.mouse_ray.push -= vertical_v120 as f32 / 120.0;
+                        // wheel notches move the panel under the pointer: up = nearer.
+                        // With Meta+Alt+Space held (evdev 125/126, 56/100, 57): all screens.
+                        let k = &self.capture_keys;
+                        let all = (k.contains(&125) || k.contains(&126))
+                            && (k.contains(&56) || k.contains(&100))
+                            && k.contains(&57);
+                        let notches = vertical_v120 as f32 / 120.0;
+                        if all {
+                            input_state.mouse_ray.push_all -= notches;
+                        } else {
+                            input_state.mouse_ray.push -= notches;
+                        }
                     } else {
                         delta.y *= -1.0;
                         hid_wrapper.inner.wheel(delta);
@@ -977,6 +1000,7 @@ impl WvrServerState {
                         config.handsfree_pointer = mode;
                     }
                     input_state.handsfree_state = Default::default();
+                    self.capture_keys.clear();
                     if input_state.edit_mode {
                         tasks.enqueue(TaskType::Overlay(OverlayTask::ToggleEditMode));
                     }
