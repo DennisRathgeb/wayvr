@@ -277,14 +277,10 @@ where
                 .unwrap(); // want panic
                 let xform_pod = Pod::from_bytes(&xform_bytes).unwrap(); // want panic
 
-                // cursor position (and room for a 64x64 bitmap, which we do not use)
-                let cursor_bytes = obj_to_bytes(get_meta_object(
-                    spa::sys::SPA_META_Cursor,
-                    std::mem::size_of::<spa::sys::spa_meta_cursor>()
-                        + std::mem::size_of::<spa::sys::spa_meta_bitmap>()
-                        + 64 * 64 * 4,
-                ))
-                .unwrap(); // want panic
+                // Cursor position. The size is a range (room for a bitmap of 1x1 to 1024x1024,
+                // which we do not use): compositors offer one fixed size of their own, and two
+                // different fixed sizes would not match.
+                let cursor_bytes = obj_to_bytes(get_cursor_meta_object()).unwrap(); // want panic
                 let cursor_pod = Pod::from_bytes(&cursor_bytes).unwrap(); // want panic
 
                 let mut pods = [params_pod, header_pod, xform_pod, cursor_pod];
@@ -296,6 +292,9 @@ where
         .process({
             let name = name.clone();
             let u = user_data;
+            let mut logged_cursor = false;
+            let mut had_cursor = false;
+            let mut buffers_seen = 0u64;
             move |stream, format| {
                 let mut maybe_buffer = None;
                 // discard all but the newest frame
@@ -306,7 +305,23 @@ where
                 if let Some(mut buffer) = maybe_buffer {
                     // The cursor comes with every buffer, also with the picture-less ones the
                     // compositor sends when only the cursor moved.
-                    if let Some(c) = buffer.find_meta::<MetaCursor>()
+                    let cursor_meta = buffer.find_meta::<MetaCursor>();
+                    buffers_seen += 1;
+                    if !logged_cursor || (buffers_seen == 120) || (!had_cursor && cursor_meta.is_some()) {
+                        had_cursor |= cursor_meta.is_some();
+                        logged_cursor = true;
+                        log::info!(
+                            "{}: buffer {}: cursor metadata {}",
+                            name,
+                            buffers_seen,
+                            match &cursor_meta {
+                                Some(c) if c.is_valid() => "present, cursor on this screen",
+                                Some(_) => "present, cursor elsewhere",
+                                None => "missing",
+                            }
+                        );
+                    }
+                    if let Some(c) = cursor_meta
                         && let Ok(mut cur) = cursor.lock()
                     {
                         *cur = (c.is_valid() && format.width > 0 && format.height > 0).then(|| {
@@ -541,6 +556,36 @@ fn get_meta_object(key: u32, size: usize) -> Object {
         spa::param::ParamType::Meta,
         meta_type_property,
         meta_size_property,
+    )
+}
+
+fn get_cursor_meta_object() -> Object {
+    const fn size(side: usize) -> i32 {
+        (std::mem::size_of::<spa::sys::spa_meta_cursor>()
+            + std::mem::size_of::<spa::sys::spa_meta_bitmap>()
+            + side * side * 4) as i32
+    }
+
+    spa::pod::object!(
+        spa::utils::SpaTypes::ObjectParamMeta,
+        spa::param::ParamType::Meta,
+        Property {
+            key: spa::sys::SPA_PARAM_META_type,
+            flags: PropertyFlags::empty(),
+            value: Value::Id(spa::utils::Id(spa::sys::SPA_META_Cursor)),
+        },
+        Property {
+            key: spa::sys::SPA_PARAM_META_size,
+            flags: PropertyFlags::empty(),
+            value: Value::Choice(ChoiceValue::Int(Choice(
+                ChoiceFlags::empty(),
+                ChoiceEnum::Range {
+                    default: size(64),
+                    min: size(1),
+                    max: size(1024),
+                },
+            ))),
+        },
     )
 }
 

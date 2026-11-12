@@ -510,6 +510,7 @@ impl ScreenCastManager {
                 prop_insert(&mut options, "types", source_types);
                 prop_insert(&mut options, "multiple", params.allow_multiple);
                 prop_insert(&mut options, "cursor_mode", cursor_mode);
+                log::info!("Screen cast: cursor mode {cursor_mode} (1 hidden, 2 embedded, 4 metadata)");
                 prop_insert(
                     &mut options,
                     "persist_mode",
