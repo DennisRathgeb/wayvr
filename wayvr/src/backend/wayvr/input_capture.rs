@@ -346,6 +346,7 @@ fn worker_main(
                             }
                             Err(error) => {
                                 grabbed = false;
+                                log::warn!("Could not grab input devices: {error}");
                                 Err(error)
                             }
                         }
@@ -380,6 +381,15 @@ fn worker_main(
                         pointer_accel,
                         &event_tx,
                     );
+                    // the same events as a grab or release by key, so the app switches modes
+                    let event = if grabbed {
+                        CapturedEvent::Grabbed
+                    } else {
+                        CapturedEvent::Ungrabbed
+                    };
+                    if event_tx.send(event).is_err() {
+                        break 'worker;
+                    }
                 }
                 Ok(Command::SetPointerAccel { accel, speed }) => {
                     pointer_accel = PointerAccelConfig { accel, speed };
