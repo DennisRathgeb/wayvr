@@ -37,6 +37,7 @@ use crate::{
 mod blocker;
 mod helpers;
 mod input;
+mod layout_file;
 mod lines;
 pub mod monado_state;
 mod overlay;
@@ -428,6 +429,8 @@ pub fn openxr_run(args: &Args, params: RunParams) -> Result<(), BackendError> {
         {
             log::error!("WayVR IPC tick_events failed: {e:?}");
         }
+
+        layout_file::tick(&app, &overlays, cur_frame as usize);
 
         // Begin rendering
         let mut futures = GpuFutures::default();

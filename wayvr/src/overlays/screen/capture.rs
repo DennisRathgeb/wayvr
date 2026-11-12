@@ -75,7 +75,17 @@ impl ScreenPipeline {
 
         let pipeline = app.gfx.create_pipeline(
             app.gfx_extras.shaders.get("vert_quad").unwrap(), // want panic
-            app.gfx_extras.shaders.get("frag_screen").unwrap(), // want panic
+            // WAYVR_BLACK_KEY: black on the screens is see-through (see screen_key.frag)
+            app.gfx_extras
+                .shaders
+                .get(
+                    if std::env::var("WAYVR_BLACK_KEY").is_ok_and(|v| v != "0") {
+                        "frag_screen_key"
+                    } else {
+                        "frag_screen"
+                    },
+                )
+                .unwrap(), // want panic
             WPipelineCreateInfo::new(app.gfx.surface_format)
                 .use_blend(AttachmentBlend::default())
                 .use_updatable_descriptors(smallvec![0]),

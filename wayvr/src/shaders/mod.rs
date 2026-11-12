@@ -67,3 +67,10 @@ pub mod frag_relief {
         path: "src/shaders/relief.frag",
     }
 }
+
+pub mod frag_screen_key {
+    vulkano_shaders::shader! {
+        ty: "fragment",
+        path: "src/shaders/screen_key.frag",
+    }
+}

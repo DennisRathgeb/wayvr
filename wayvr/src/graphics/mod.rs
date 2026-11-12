@@ -85,6 +85,9 @@ impl WGfxExtras {
         let shader = frag_screen::load(gfx.device.clone())?;
         shaders.insert("frag_screen", shader);
 
+        let shader = crate::shaders::frag_screen_key::load(gfx.device.clone())?;
+        shaders.insert("frag_screen_key", shader);
+
         let shader = crate::shaders::frag_cursor::load(gfx.device.clone())?;
         shaders.insert("frag_cursor", shader);
 
