@@ -92,6 +92,9 @@ pub struct OverlayWindowConfig {
     pub resizing: bool,
     /// Used by grab to pause following of HMD or other devices
     pub pause_movement: bool,
+    /// Kept up to date but not shown and not hit by pointers: a screen whose parts are shown as
+    /// region panels instead.
+    pub ghost: bool,
 }
 
 impl OverlayWindowConfig {
@@ -113,6 +116,7 @@ impl OverlayWindowConfig {
             editing: false,
             resizing: false,
             pause_movement: false,
+            ghost: false,
         }
     }
 

@@ -506,7 +506,7 @@ pub fn openxr_run(args: &Args, params: RunParams) -> Result<(), BackendError> {
             let dist_sq = (app.input_state.hmd.translation - active_state.transform.translation)
                 .length_squared()
                 + (100f32 - o.config.z_order as f32);
-            if !dist_sq.is_normal() {
+            if !dist_sq.is_normal() || o.config.ghost {
                 o.data.swapchain.as_mut().unwrap().ensure_image_released()?;
                 continue;
             }

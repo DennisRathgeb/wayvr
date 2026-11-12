@@ -97,6 +97,36 @@ static REGION_INBOX: Mutex<Option<String>> = Mutex::new(None);
 #[derive(serde::Deserialize)]
 struct RegionList {
     regions: Vec<RegionSpec>,
+    /// The screens the regions are cut from are not shown themselves while this is set.
+    #[serde(default)]
+    hide_screen: bool,
+}
+
+/// When the last region list arrived. A sender that has gone quiet (its page closed) must not
+/// leave the screen hidden: after `REGION_TIMEOUT` the regions go and the screen comes back.
+static REGION_SEEN: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+const REGION_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Hides or shows the mirrored screens themselves (they keep updating either way).
+fn ghost_screens(
+    app: &mut AppState,
+    overlays: &OverlayWindowManager<OpenXrOverlayData>,
+    ghost: bool,
+) {
+    for o in overlays.values() {
+        if o.config.backend.desktop_rect().is_none() || o.config.ghost == ghost {
+            continue;
+        }
+        app.tasks.enqueue(TaskType::Overlay(OverlayTask::Modify(
+            OverlaySelector::Name(o.config.name.clone()),
+            Box::new(move |_app, owc| {
+                owc.ghost = ghost;
+                if let Some(state) = owc.active_state.as_mut() {
+                    state.interactable = !ghost;
+                }
+            }),
+        )));
+    }
 }
 
 thread_local! {
@@ -131,7 +161,7 @@ fn apply_regions(
             })
             .unwrap_or(0.0008)
     };
-    // Where a region goes when it does not say: just in front of its place on its screen's panel
+    // Where a region goes when it does not say: at its place on its screen's panel
     // (the panel's plane at its centre; a curved screen is treated as flat here).
     let default_pose = |r: &RegionSpec| -> Option<Vec<f32>> {
         overlays
@@ -148,7 +178,7 @@ fn apply_regions(
                 let (_, rotation, _) = Mat4::from(t).to_scale_rotation_translation();
                 let u = (r.rect[0] + r.rect[2] / 2.0 - d[0]) / d[2] - 0.5;
                 let v = 0.5 - (r.rect[1] + r.rect[3] / 2.0 - d[1]) / d[3];
-                let local = glam::Vec3::new(u * width, v * width * d[3] / d[2], 0.08);
+                let local = glam::Vec3::new(u * width, v * width * d[3] / d[2], 0.01);
                 let pos = glam::Vec3::from(t.translation) + rotation * local;
                 Some(
                     Mat4::from_rotation_translation(rotation, pos)
@@ -157,6 +187,7 @@ fn apply_regions(
                 )
             })
     };
+    ghost_screens(app, overlays, list.hide_screen && !list.regions.is_empty());
     REGIONS.with_borrow_mut(|known| {
         known.retain(|id, _| {
             let keep = list.regions.iter().any(|r| &r.id == id);
@@ -258,10 +289,19 @@ pub(super) fn tick(
     frame: usize,
 ) {
     let out = outputs();
-    if out.http.is_some()
-        && let Some(text) = REGION_INBOX.lock().ok().and_then(|mut i| i.take())
-    {
-        apply_regions(app, overlays, &text);
+    if out.http.is_some() {
+        if let Some(text) = REGION_INBOX.lock().ok().and_then(|mut i| i.take()) {
+            if let Ok(mut seen) = REGION_SEEN.lock() {
+                *seen = Some(std::time::Instant::now());
+            }
+            apply_regions(app, overlays, &text);
+        } else if let Ok(mut seen) = REGION_SEEN.lock()
+            && seen.is_some_and(|t| t.elapsed() > REGION_TIMEOUT)
+        {
+            *seen = None;
+            log::info!("regions: the sender went quiet, removing its panels");
+            apply_regions(app, overlays, r#"{"regions":[]}"#);
+        }
     }
     if (out.file.is_none() && out.http.is_none()) || frame % 6 != 0 {
         return;
