@@ -276,6 +276,7 @@ fn check(mut par: CheckParams, finalize_fn: ScreenCastFinalizeFn) {
                     par.name,
                     pw_result.streams
                 );
+                let mut wrong_screen = false;
                 let stream = pw_result.streams.first().unwrap(); // streams guaranteed to have at least one element
                 let node_id = stream.node_id;
                 log::info!("{}: PipeWire node selected: {}", par.name, node_id);
@@ -298,6 +299,7 @@ fn check(mut par: CheckParams, finalize_fn: ScreenCastFinalizeFn) {
                         );
                         par.logical_pos = pos;
                         par.logical_size = size;
+                        wrong_screen = true;
                     }
                 }
 
@@ -306,7 +308,10 @@ fn check(mut par: CheckParams, finalize_fn: ScreenCastFinalizeFn) {
                 }
 
                 let pw_tokens_copy = par.app.session.pw_tokens.clone();
-                if let Some(restore_token) = pw_result.restore_token.as_ref()
+                if wrong_screen {
+                    // do not remember a wrong pick: ask again at the next start
+                    par.app.session.pw_tokens.arc_rm(&par.name);
+                } else if let Some(restore_token) = pw_result.restore_token.as_ref()
                     && par
                         .app
                         .session
