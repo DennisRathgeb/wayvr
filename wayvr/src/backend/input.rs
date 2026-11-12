@@ -536,9 +536,11 @@ where
         }
     }
 
-    // Meta+Alt+wheel: the whole group moves along the line of sight, nearer (positive) or
-    // farther. It moves as one piece (the anchor moves), so the screens keep their spacing and
-    // their angles to each other.
+    // Meta+Alt+wheel: the arc of screens is laid out again at a new radius around the head.
+    // Every anchored screen moves along its own line from the head, 8 % of its distance a step
+    // (positive = nearer), and grows or shrinks by the same factor, so neighbours stay side by
+    // side at their angles and keep their apparent size: only the distance changes. The head is
+    // the centre whatever the anchor's position, which keeps the circle around the wearer.
     let push_all = std::mem::take(&mut app.input_state.mouse_ray.push_all);
     let scale_all = std::mem::take(&mut app.input_state.mouse_ray.scale_all);
     if push_all.abs() > 0.1 || scale_all.abs() > 0.1 {
@@ -548,10 +550,38 @@ where
         let scale = app.anchor.matrix3.x_axis.length();
         let new_scale = (scale * 1.08f32.powf(scale_all)).clamp(0.3, 4.0);
         app.anchor.matrix3 = app.anchor.matrix3.mul_scalar(new_scale / scale);
-        let forward = hmd.transform_vector3a(Vec3A::NEG_Z).normalize_or_zero();
-        let dist = (app.anchor.translation - hmd.translation).dot(forward).clamp(0.3, 6.0);
-        let new_dist = (dist * (1.0 - 0.08 * push_all)).clamp(0.3, 6.0);
-        app.anchor.translation += forward * (new_dist - dist);
+        if push_all.abs() > 0.1 {
+            let head = hmd.translation;
+            // The step is limited so that the nearest screen stays beyond 0.3 m, the farthest
+            // within 6 m and the group's scale between 0.3 and 4; a limit already passed only
+            // allows the way back (each bound lies on the far side of 1, so the clamp holds).
+            let (mut nearest, mut farthest) = (f32::INFINITY, 0.0f32);
+            for overlay in overlays.values() {
+                let Some(state) = overlay.config.active_state.as_ref() else {
+                    continue;
+                };
+                if !matches!(state.positioning, Positioning::Anchored) {
+                    continue;
+                }
+                let d = (state.transform.translation - head).length();
+                nearest = nearest.min(d);
+                farthest = farthest.max(d);
+            }
+            let group_scale = app.anchor.matrix3.x_axis.length();
+            let lo = (0.3 / nearest).min(1.0).max((0.3 / group_scale).min(1.0));
+            let hi = (6.0 / farthest).max(1.0).min((4.0 / group_scale).max(1.0));
+            let k = (1.0 - 0.08 * push_all).clamp(lo, hi);
+            if nearest.is_finite() && nearest > 1e-3 && k.is_finite() {
+                // x' = head + k (x - head), applied to the anchor: anchored screens are placed
+                // as anchor * saved, so their positions and sizes follow.
+                let about_head = Affine3A::from_scale_rotation_translation(
+                    glam::Vec3::splat(k),
+                    Quat::IDENTITY,
+                    glam::Vec3::from((1.0 - k) * head),
+                );
+                app.anchor = about_head * app.anchor;
+            }
+        }
         if let Some((_, Some(rel))) = app.input_state.carry.as_mut() {
             *rel = hmd.inverse() * app.anchor; // carried at the same time: keep the new distance
         }
