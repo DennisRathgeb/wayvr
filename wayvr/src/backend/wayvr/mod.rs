@@ -897,23 +897,10 @@ impl WvrServerState {
                     } else if self.has_input_focus {
                         self.manager.send_pointer_button(mouse_index, pressed);
                     } else if matches!(config.handsfree_pointer, HandsfreePointer::Mouse) {
-                        // the mouse pointer: buttons act where the ray points. In edit mode the
-                        // left button grabs the panel instead of clicking into it.
-                        let edit_mode = input_state.edit_mode;
-                        let st = &mut input_state.handsfree_state;
-                        match mouse_index {
-                            MouseIndex::Left if st.grab && !pressed => st.grab = false,
-                            MouseIndex::Left if edit_mode => st.grab = pressed,
-                            MouseIndex::Left => st.click = pressed,
-                            MouseIndex::Right if !edit_mode => {
-                                st.click = pressed;
-                                st.click_modifier_right = pressed;
-                            }
-                            MouseIndex::Center if !edit_mode => {
-                                st.click = pressed;
-                                st.click_modifier_middle = pressed;
-                            }
-                            _ => {}
+                        // the mouse pointer exists only in edit mode: the left button grabs the
+                        // panel under it, nothing is clicked
+                        if matches!(mouse_index, MouseIndex::Left) {
+                            input_state.handsfree_state.grab = pressed;
                         }
                     } else {
                         hid_wrapper.inner.send_button(button as u16, pressed);
@@ -943,9 +930,7 @@ impl WvrServerState {
                         input_state.handsfree_state.scroll_y = (vertical_v120 as f32) * -0.12;
                     } else if self.has_input_focus {
                         self.manager.send_pointer_axis_wheel_raw(delta);
-                    } else if matches!(config.handsfree_pointer, HandsfreePointer::Mouse)
-                        && (input_state.edit_mode || input_state.handsfree_state.grab)
-                    {
+                    } else if matches!(config.handsfree_pointer, HandsfreePointer::Mouse) {
                         // wheel notches move the panel under the pointer: up = nearer
                         input_state.mouse_ray.push -= vertical_v120 as f32 / 120.0;
                     } else {
@@ -968,6 +953,10 @@ impl WvrServerState {
                     input_state.handsfree_state = Default::default();
                     input_state.mouse_ray.aim_like(&input_state.hmd);
                     input_state.mouse_ray.push = 0.0;
+                    // capturing the mouse is edit mode: drag panels, wheel = nearer / farther
+                    if !input_state.edit_mode {
+                        tasks.enqueue(TaskType::Overlay(OverlayTask::ToggleEditMode));
+                    }
                     self.run_capture_hook("grabbed");
                 }
                 input_capture::CapturedEvent::Ungrabbed => {
@@ -994,9 +983,6 @@ impl WvrServerState {
                     self.run_capture_hook("ungrabbed");
                 }
                 input_capture::CapturedEvent::KeyCombo { combo, pressed } => match combo {
-                    input_capture::KeyCombo::EditMode if pressed => {
-                        tasks.enqueue(TaskType::Overlay(OverlayTask::ToggleEditMode));
-                    }
                     input_capture::KeyCombo::CloseApp if pressed => {
                         if let Some(hover) = self.wm.mouse.as_mut() {
                             let window_handle = hover.hover_window;

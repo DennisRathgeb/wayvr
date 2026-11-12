@@ -34,8 +34,6 @@ const POLL_TIMEOUT_MS: i32 = 20;
 pub enum KeyCombo {
     SwitchApp,
     CloseApp,
-    /// Toggle edit mode (move panels with the mouse)
-    EditMode,
     /// Always consumed by InputCapture internally
     GrabRelease,
 }
@@ -593,7 +591,7 @@ fn process_libinput_event(par: ProcessLibinputEventParams) -> ProcessResult {
             }
 
             // while grabbed, these combos get emitted as normal
-            for combo in [KeyCombo::SwitchApp, KeyCombo::CloseApp, KeyCombo::EditMode] {
+            for combo in [KeyCombo::SwitchApp, KeyCombo::CloseApp] {
                 let mut combo_pressed = key_combo_is_pressed(combo, &state.pressed_keys);
                 let was_pressed = state.active_combos.contains(&combo);
 
@@ -917,12 +915,8 @@ fn mod_super(pressed: &HashSet<u16>) -> bool {
 fn key_combo_is_pressed(combo: KeyCombo, pressed: &HashSet<u16>) -> bool {
     match combo {
         KeyCombo::CloseApp => mod_alt(pressed) && pressed.contains(&KeyCode::KEY_F4.0),
-        // Meta+Alt+M: mouse and keyboard between the desktop and the glasses
+        // Meta+Alt+E: edit mode, the only time mouse and keyboard are taken from the desktop
         KeyCombo::GrabRelease => {
-            mod_super(pressed) && mod_alt(pressed) && pressed.contains(&KeyCode::KEY_M.0)
-        }
-        // Meta+Alt+E: edit mode
-        KeyCombo::EditMode => {
             mod_super(pressed) && mod_alt(pressed) && pressed.contains(&KeyCode::KEY_E.0)
         }
         // Meta+X without Alt, so Meta+Alt+X stays free for the desktop
