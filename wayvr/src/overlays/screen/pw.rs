@@ -276,8 +276,30 @@ fn check(mut par: CheckParams, finalize_fn: ScreenCastFinalizeFn) {
                     par.name,
                     pw_result.streams
                 );
-                let node_id = pw_result.streams.first().unwrap().node_id; // streams guaranteed to have at least one element
+                let stream = pw_result.streams.first().unwrap(); // streams guaranteed to have at least one element
+                let node_id = stream.node_id;
                 log::info!("{}: PipeWire node selected: {}", par.name, node_id);
+
+                // The portal lets the user pick any screen, not necessarily the one asked for.
+                // The mouse must act on the screen that is actually shown, so take its place on
+                // the desktop from the stream.
+                if let (Some(pos), Some(size)) = (stream.position, stream.size) {
+                    let (pos, size) = (
+                        Vec2::new(pos.0 as f32, pos.1 as f32),
+                        Vec2::new(size.0 as f32, size.1 as f32),
+                    );
+                    if pos != par.logical_pos || size != par.logical_size {
+                        log::warn!(
+                            "{}: the selected screen is at {pos} size {size}, not at {} size {}: \
+                             using the selected one for the mouse",
+                            par.name,
+                            par.logical_pos,
+                            par.logical_size
+                        );
+                        par.logical_pos = pos;
+                        par.logical_size = size;
+                    }
+                }
 
                 if let Some(id) = par.notify_id.take() {
                     let _ = DbusConnector::notify_close(id);

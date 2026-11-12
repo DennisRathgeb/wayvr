@@ -92,15 +92,11 @@ where
             match create_screens(app) {
                 Ok((data, backend)) => {
                     app.feats.desktop_backend = backend;
-                    let last_idx = data.screens.len() - 1;
-                    for (idx, (meta, mut config)) in data.screens.into_iter().enumerate() {
+                    // all screens together in the first set (they come arranged side by side,
+                    // see create_screens_wayland); restore_layout below may override this
+                    for (meta, mut config) in data.screens {
                         config.show_on_spawn = true;
                         me.add(OverlayWindowData::from_config(config), app);
-
-                        if idx < last_idx {
-                            me.sets.push(OverlayWindowSet::default());
-                            me.switch_to_set(app, Some(me.current_set.unwrap() + 1), false);
-                        }
                         app.screens.push(meta);
                     }
                 }

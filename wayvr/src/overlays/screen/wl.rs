@@ -79,6 +79,7 @@ pub fn create_screens_wayland(
     app: &mut AppState,
 ) -> anyhow::Result<ScreenCreateData> {
     let mut screens = vec![];
+    let mut order = vec![];
     let has_wlr_screencopy = wl.maybe_wlr_screencopy_mgr.is_some();
 
     for (id, output) in &wl.outputs {
@@ -107,7 +108,24 @@ pub fn create_screens_wayland(
             native_handle: *id,
         };
 
+        order.push(output.logical_pos.0);
         screens.push((meta, window_config));
+    }
+
+    // Side by side on an arc around the viewer, left to right as on the desktop.
+    {
+        const RADIUS: f32 = 1.6;
+        let mut by_x: Vec<usize> = (0..screens.len()).collect();
+        by_x.sort_by_key(|i| order[*i]);
+        let mid = (screens.len() as f32 - 1.0) / 2.0;
+        for (slot, i) in by_x.into_iter().enumerate() {
+            let tf = &mut screens[i].1.default_state.transform;
+            let width = tf.x_axis.length();
+            let angle = (slot as f32 - mid) * (width * 1.03 / RADIUS);
+            let pivot = tf.translation + glam::Vec3A::Z * RADIUS;
+            tf.matrix3 = glam::Mat3A::from_rotation_y(-angle) * tf.matrix3;
+            tf.translation = pivot + glam::Vec3A::new(angle.sin(), 0.0, -angle.cos()) * RADIUS;
+        }
     }
 
     let extent = wl.get_desktop_extent();
