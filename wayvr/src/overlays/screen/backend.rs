@@ -149,6 +149,15 @@ impl ScreenBackend {
 }
 
 impl OverlayBackend for ScreenBackend {
+    fn desktop_rect(&self) -> Option<[f32; 4]> {
+        Some([
+            self.logical_pos.x,
+            self.logical_pos.y,
+            self.logical_size.x,
+            self.logical_size.y,
+        ])
+    }
+
     fn init(&mut self, _app: &mut AppState) -> anyhow::Result<()> {
         Ok(())
     }

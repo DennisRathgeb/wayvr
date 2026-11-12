@@ -156,6 +156,11 @@ pub trait OverlayBackend: Any {
     /// Called every frame before rendering with the overlay's pose in the stage space.
     fn set_world_transform(&mut self, _transform: Affine3A) {}
 
+    /// For a mirrored screen: its place and size on the desktop (logical x, y, width, height).
+    fn desktop_rect(&self) -> Option<[f32; 4]> {
+        None
+    }
+
     fn on_hover(&mut self, app: &mut AppState, hit: &PointerHit) -> HoverResult;
     fn on_left(&mut self, app: &mut AppState, pointer: usize);
     fn on_pointer(&mut self, app: &mut AppState, hit: &PointerHit, pressed: bool);
