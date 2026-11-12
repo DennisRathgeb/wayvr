@@ -534,16 +534,27 @@ where
         }
     }
 
+    // Meta+Alt+wheel: the whole group moves along the line of sight, nearer (positive) or
+    // farther. It moves as one piece (the anchor moves), so the screens keep their spacing and
+    // their angles to each other.
     let push_all = std::mem::take(&mut app.input_state.mouse_ray.push_all);
     if push_all.abs() > 0.1 {
         let hmd = app.input_state.hmd;
+        let forward = hmd.transform_vector3a(Vec3A::NEG_Z).normalize_or_zero();
+        let dist = (app.anchor.translation - hmd.translation).dot(forward).clamp(0.3, 6.0);
+        let new_dist = (dist * (1.0 - 0.08 * push_all)).clamp(0.3, 6.0);
+        app.anchor.translation += forward * (new_dist - dist);
+        if let Some((_, Some(rel))) = app.input_state.carry.as_mut() {
+            *rel = hmd.inverse() * app.anchor; // carried at the same time: keep the new distance
+        }
         for overlay in overlays.values_mut() {
-            if overlay.config.category == OverlayCategory::Screen
-                && let Some(state) = overlay.config.active_state.as_mut()
+            if overlay
+                .config
+                .active_state
+                .as_ref()
+                .is_some_and(|s| matches!(s.positioning, Positioning::Anchored))
             {
-                push_pull_from_head(&mut state.transform, &hmd, push_all);
-                window::save_transform(state, app);
-                overlay.config.dirty = true;
+                overlay.config.reset(app, false);
             }
         }
     }
