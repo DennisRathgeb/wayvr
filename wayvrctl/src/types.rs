@@ -8,6 +8,7 @@ impl From<crate::HandsfreeMode> for ipc::HandsfreeMode {
             crate::HandsfreeMode::HmdPinch => Self::HmdPinch,
             crate::HandsfreeMode::EyeTracking => Self::EyeTracking,
             crate::HandsfreeMode::EyeTrackingPinch => Self::EyeTrackingPinch,
+            crate::HandsfreeMode::Mouse => Self::Mouse,
         }
     }
 }

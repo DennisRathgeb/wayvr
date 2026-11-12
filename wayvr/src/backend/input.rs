@@ -3,7 +3,7 @@ use std::process::{Child, Command};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use glam::{Affine3A, Vec2, Vec3A, Vec3Swizzles};
+use glam::{Affine3A, Quat, Vec2, Vec3A, Vec3Swizzles};
 
 use idmap_derive::IntegerId;
 use smallvec::{SmallVec, smallvec};
@@ -66,12 +66,47 @@ pub enum FocusPickState {
     Picking,
 }
 
+/// The mouse pointer: a ray from the head whose direction is fixed in the world, not the head,
+/// and is turned by the captured mouse. Yaw about +Y, pitch about the ray's X, in radians.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct MouseRay {
+    pub yaw: f32,
+    pub pitch: f32,
+    /// Wheel notches since the last frame (positive = wheel up = nearer); consumed once a frame
+    /// to push or pull the panel under the pointer.
+    pub push: f32,
+}
+
+impl MouseRay {
+    const MAX_PITCH: f32 = 85.0 * PI / 180.0;
+
+    /// Turn by a mouse motion (right and down are positive), `sensitivity` in radians per unit.
+    pub fn turn(&mut self, dx: f32, dy: f32, sensitivity: f32) {
+        self.yaw = (self.yaw - dx * sensitivity).rem_euclid(2.0 * PI);
+        self.pitch = (self.pitch - dy * sensitivity).clamp(-Self::MAX_PITCH, Self::MAX_PITCH);
+    }
+
+    /// Point where the head looks.
+    pub fn aim_like(&mut self, hmd: &Affine3A) {
+        let fwd = hmd.transform_vector3a(Vec3A::NEG_Z).normalize_or_zero();
+        self.yaw = (-fwd.x).atan2(-fwd.z);
+        self.pitch = fwd.y.clamp(-1.0, 1.0).asin();
+    }
+
+    pub fn rotation(&self) -> Quat {
+        Quat::from_rotation_y(self.yaw) * Quat::from_rotation_x(self.pitch)
+    }
+}
+
 pub struct InputState {
     pub hmd: Affine3A,
     pub ipd: f32,
     pub pointers: [Pointer; 2],
     pub devices: Vec<TrackedDevice>,
     pub handsfree_state: PointerState,
+    pub mouse_ray: MouseRay,
+    /// Mirrored from the overlay manager every frame, so input routing can see it.
+    pub edit_mode: bool,
     pub picking_focus: FocusPickState,
     processes: Vec<Child>,
     disable_lerp_until: Instant,
@@ -86,6 +121,8 @@ impl InputState {
             devices: Vec::new(),
             processes: Vec::new(),
             handsfree_state: PointerState::default(),
+            mouse_ray: MouseRay::default(),
+            edit_mode: false,
             picking_focus: FocusPickState::None,
             disable_lerp_until: Instant::now(),
         }
@@ -308,6 +345,8 @@ pub struct Pointer {
     pub(super) interaction: InteractionState,
     pub tracked: bool,
     pub handsfree: bool,
+    /// This pointer is the mouse ray (see `MouseRay`).
+    pub mouse: bool,
 }
 
 impl Pointer {
@@ -324,6 +363,7 @@ impl Pointer {
             interaction: InteractionState::default(),
             tracked: false,
             handsfree: false,
+            mouse: false,
         }
     }
 
@@ -408,25 +448,16 @@ fn populate_lines(
     hmd: &Affine3A,
 ) {
     let Some((hit, raw_hit)) = maybe_hit else {
+        if pointer.mouse && pointer.tracked {
+            // the mouse pointer in space, between the panels: a cursor at arm's length
+            let pos = pointer.pose.transform_point3a(Vec3A::NEG_Z * 1.5);
+            push_crosshair(lines, PointerMode::Left, pos, hmd);
+        }
         return;
     };
 
     if pointer.handsfree {
-        const HALF_SIZE: f32 = 0.01;
-
-        // horizontal arm
-        lines.push(PointerLine {
-            mode: hit.mode,
-            a: raw_hit.global_pos - (hmd.x_axis * HALF_SIZE),
-            b: raw_hit.global_pos + (hmd.x_axis * HALF_SIZE),
-        });
-
-        // vertical arm
-        lines.push(PointerLine {
-            mode: PointerMode::Special,
-            a: raw_hit.global_pos - (hmd.y_axis * HALF_SIZE),
-            b: raw_hit.global_pos + (hmd.y_axis * HALF_SIZE),
-        });
+        push_crosshair(lines, hit.mode, raw_hit.global_pos, hmd);
     } else {
         lines.push(PointerLine {
             mode: hit.mode,
@@ -434,6 +465,24 @@ fn populate_lines(
             b: raw_hit.global_pos,
         });
     }
+}
+
+fn push_crosshair(lines: &mut Vec<PointerLine>, mode: PointerMode, pos: Vec3A, hmd: &Affine3A) {
+    const HALF_SIZE: f32 = 0.01;
+
+    // horizontal arm
+    lines.push(PointerLine {
+        mode,
+        a: pos - (hmd.x_axis * HALF_SIZE),
+        b: pos + (hmd.x_axis * HALF_SIZE),
+    });
+
+    // vertical arm
+    lines.push(PointerLine {
+        mode: PointerMode::Special,
+        a: pos - (hmd.y_axis * HALF_SIZE),
+        b: pos + (hmd.y_axis * HALF_SIZE),
+    });
 }
 
 fn update_focus(app: &mut AppState, overlay_input_focus: Option<InputFocus>) {
@@ -455,6 +504,8 @@ pub fn interact<O>(
 where
     O: Default,
 {
+    app.input_state.edit_mode = overlays.get_edit_mode();
+
     let hits = if app.input_state.pointers[1].last_click > app.input_state.pointers[0].last_click {
         let right = interact_hand(1, overlays, app);
         let left = interact_hand(0, overlays, app);
@@ -662,6 +713,14 @@ fn handle_no_hit<O>(
 fn handle_scroll<O>(hit: &PointerHit, hovered: &mut OverlayWindowData<O>, app: &mut AppState) {
     let pointer = &mut app.input_state.pointers[hit.pointer];
     if pointer.now.scroll_x.abs() <= 0.1 && pointer.now.scroll_y.abs() <= 0.1 {
+        return;
+    }
+
+    if pointer.mouse && app.input_state.edit_mode {
+        // edit mode with the mouse: the wheel brings the panel nearer (wheel up) or pushes it away
+        if let Some(state) = hovered.config.active_state.as_mut() {
+            push_pull_from_head(&mut state.transform, &app.input_state.hmd, pointer.now.scroll_y);
+        }
         return;
     }
 
@@ -892,6 +951,18 @@ fn start_grab(par: StartGrabParams) {
     }
 }
 
+/// Move `transform` along the line from the head by `notches` wheel notches, each 8 % of the
+/// distance (positive = nearer), staying between 0.3 and 6 m.
+fn push_pull_from_head(transform: &mut Affine3A, hmd: &Affine3A, notches: f32) {
+    let from_head = transform.translation - hmd.translation;
+    let dist = from_head.length();
+    if dist < 1e-3 || !notches.is_finite() {
+        return;
+    }
+    let new_dist = (dist * (1.0 - 0.08 * notches)).clamp(0.3, 6.0);
+    transform.translation = hmd.translation + from_head * (new_dist / dist);
+}
+
 fn handle_scale(transform: &mut Affine3A, scroll_y: f32) {
     let cur_scale = transform.x_axis.length();
     if cur_scale < 0.1 && scroll_y > 0.0 {
@@ -907,6 +978,16 @@ fn handle_scale(transform: &mut Affine3A, scroll_y: f32) {
 }
 
 #[allow(clippy::too_many_lines)]
+/// A grabbed panel follows the mouse ray; the wheel moves it along the ray (notches, positive =
+/// nearer, 8 % of the distance each), between 0.3 and 6 m.
+fn mouse_push_pull(offset: &mut Affine3A, notches: f32) {
+    if notches.abs() < 0.1 || !notches.is_finite() {
+        return;
+    }
+    let dist = (-offset.translation.z).max(0.3);
+    offset.translation.z = -(dist * (1.0 - 0.08 * notches)).clamp(0.3, 6.0);
+}
+
 fn handle_grabbed<O>(idx: usize, overlay: &mut OverlayWindowData<O>, app: &mut AppState)
 where
     O: Default,
@@ -939,6 +1020,8 @@ where
                     &mut grab_data.offset,
                     pointer.now.scroll_y * grab_dist * scroll_factor,
                 );
+            } else if pointer.mouse {
+                mouse_push_pull(&mut grab_data.offset, pointer.now.scroll_y);
             } else if app.session.config.allow_sliding && pointer.now.scroll_y.is_finite() {
                 // single grab push/pull
                 let grab_dist = grab_data.offset.translation.length().clamp(0.5, 5.0);
@@ -972,6 +1055,8 @@ where
                     &mut grab_data.offset,
                     pointer.now.scroll_y * grab_dist * scroll_factor,
                 );
+            } else if pointer.mouse {
+                mouse_push_pull(&mut grab_data.offset, pointer.now.scroll_y);
             } else if app.session.config.allow_sliding && pointer.now.scroll_y.is_finite() {
                 // single grab push/pull
                 let grab_dist = grab_data.offset.translation.length().clamp(0.5, 5.0);

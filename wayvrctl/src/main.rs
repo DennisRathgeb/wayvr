@@ -337,6 +337,8 @@ pub enum HandsfreeMode {
     EyeTracking,
     /// Pointer controlled eye gaze. Left pinch click, right pinch grab.
     EyeTrackingPinch,
+    /// Pointer is a ray from the head turned by the captured mouse (evdev input capture)
+    Mouse,
 }
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]

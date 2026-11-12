@@ -131,6 +131,9 @@ pub enum HandsfreePointer {
 	EyeTracking,
 	#[strum(props(Translation = "APP_SETTINGS.OPTION.EYE_ONLY", Backend = "OpenXR"))]
 	EyeTrackingOnly,
+	/// A ray from the head, turned by the physical mouse (needs evdev input capture).
+	#[strum(props(Translation = "APP_SETTINGS.OPTION.MOUSE"))]
+	Mouse,
 }
 
 #[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, AsRefStr, EnumString, EnumProperty, VariantArray)]
@@ -255,6 +258,10 @@ pub const fn def_pw_tokens() -> PwTokenMap {
 	AStrMap::new()
 }
 
+const fn def_mouse_pointer_sensitivity() -> f32 {
+	0.00025 // radians per mouse unit: a 1920-unit sweep turns the ray by about 27 degrees
+}
+
 const fn def_mouse_move_interval_ms() -> i32 {
 	10 // 100fps
 }
@@ -358,6 +365,10 @@ pub struct GeneralConfig {
 
 	#[serde(default = "def_mouse_move_interval_ms")]
 	pub mouse_move_interval_ms: i32,
+
+	/// Mouse pointer mode: how far the ray turns per unit of mouse movement (radians)
+	#[serde(default = "def_mouse_pointer_sensitivity")]
+	pub mouse_pointer_sensitivity: f32,
 
 	#[serde(default = "def_true")]
 	pub notifications_enabled: bool,

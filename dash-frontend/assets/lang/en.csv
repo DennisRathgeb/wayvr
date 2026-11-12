@@ -157,6 +157,7 @@ otherwise PipeWire GPU.",Tooltip for the Automatic capture method option.
 APP_SETTINGS.OPTION.EYE_ONLY,Eye laser,Dropdown option for handsfree pointer mode. Uses only eye-tracking laser (no pinch).
 APP_SETTINGS.OPTION.EYE_PINCH,Eye + pinch,Dropdown option for handsfree pointer mode. Uses eye-tracking for aiming and pinch for click.
 APP_SETTINGS.OPTION.HMD_ONLY,HMD laser,Dropdown option for handsfree pointer/alt-tab mode. Uses only the HMD forward laser.
+APP_SETTINGS.OPTION.MOUSE,Mouse,Dropdown option for handsfree pointer mode. A ray from the head turned by the captured mouse.
 APP_SETTINGS.OPTION.HMD_PINCH,HMD + pinch,Dropdown option for handsfree pointer mode. Uses HMD laser for aiming and pinch for click.
 APP_SETTINGS.OPTION.NONE,None,"Dropdown option used as the no binding or disabled choice in various settings (input emulation, input capture, handsfree pointer, alt modifier, whisper model)."
 APP_SETTINGS.OPTION.NONE_INPUT_HELP,"Do not emulate mouse and keyboard.

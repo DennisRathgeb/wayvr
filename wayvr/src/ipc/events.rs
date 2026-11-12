@@ -69,6 +69,7 @@ where
                         HandsfreeMode::HmdPinch => HandsfreePointer::Hmd,
                         HandsfreeMode::EyeTracking => HandsfreePointer::EyeTrackingOnly,
                         HandsfreeMode::EyeTrackingPinch => HandsfreePointer::EyeTracking,
+                        HandsfreeMode::Mouse => HandsfreePointer::Mouse,
                     };
                     app.session.config.handsfree_pointer = mode;
                 }

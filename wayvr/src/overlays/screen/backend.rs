@@ -304,6 +304,7 @@ impl OverlayBackend for ScreenBackend {
         }
 
         if can_move()
+            && !app.input_state.edit_mode
             && (!app.session.config.focus_follows_mouse_mode
                 || app.input_state.pointers[hit.pointer].now.move_mouse)
         {

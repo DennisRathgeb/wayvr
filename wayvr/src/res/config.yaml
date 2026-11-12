@@ -76,6 +76,10 @@
 ## a high-refresh screen with a lower-refresh hmd
 #mouse_move_interval_ms: 10
 
+## Mouse pointer mode (handsfree_pointer: Mouse, needs evdev input capture):
+## how far the pointer ray turns per unit of mouse movement, in radians
+#mouse_pointer_sensitivity: 0.00025
+
 ################ MANAGED FROM DASHBOARD ################
 ################ MANAGED FROM DASHBOARD ################
 ################ MANAGED FROM DASHBOARD ################

@@ -27,6 +27,7 @@ pub enum HandsfreeMode {
 	HmdPinch,
 	EyeTracking,
 	EyeTrackingPinch,
+	Mouse,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]

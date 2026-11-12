@@ -15,7 +15,7 @@ use wlx_common::{
 
 use crate::{
     backend::input::{
-        Haptics, InputState, Pointer, PointerState, TrackedDevice, TrackedDeviceRole,
+        Haptics, InputState, MouseRay, Pointer, PointerState, TrackedDevice, TrackedDeviceRole,
     },
     state::{AppSession, AppState},
 };
@@ -267,6 +267,7 @@ impl OpenXrInputSource {
                 hmd,
                 hmd_tracked,
                 &app.input_state.handsfree_state,
+                &mut app.input_state.mouse_ray,
             )?;
 
             app.session.config.handsfree_pointer = old_handsfree;
@@ -373,9 +374,22 @@ impl OpenXrPointer {
         hmd: Affine3A,
         hmd_tracked: bool,
         handsfree_state: &PointerState,
+        mouse_ray: &mut MouseRay,
     ) -> anyhow::Result<()> {
+        pointer.mouse = false;
         match session.config.handsfree_pointer {
             HandsfreePointer::None => return Ok(()),
+            HandsfreePointer::Mouse => {
+                // a ray from the head, turned by the captured mouse; no smoothing, a mouse is exact
+                pointer.tracked = hmd_tracked;
+                pointer.mouse = true;
+                let pose = Affine3A::from_rotation_translation(
+                    mouse_ray.rotation(),
+                    Vec3::from(hmd.translation),
+                );
+                pointer.raw_pose = pose;
+                pointer.pose = pose;
+            }
             HandsfreePointer::Hmd | HandsfreePointer::HmdOnly => {
                 pointer.tracked = hmd_tracked;
                 pointer.raw_pose = hmd;
@@ -405,15 +419,19 @@ impl OpenXrPointer {
         pointer.handsfree = pointer.tracked;
         if matches!(
             session.config.handsfree_pointer,
-            HandsfreePointer::HmdOnly | HandsfreePointer::EyeTrackingOnly
+            HandsfreePointer::HmdOnly | HandsfreePointer::EyeTrackingOnly | HandsfreePointer::Mouse
         ) {
-            // input from wayvrctl
+            // input from wayvrctl, or from the captured mouse
             pointer.now.click = handsfree_state.click;
             pointer.now.grab = handsfree_state.grab;
             pointer.now.grab_float = handsfree_state.grab_float;
             pointer.now.click_modifier_right = handsfree_state.click_modifier_right;
             pointer.now.click_modifier_middle = handsfree_state.click_modifier_middle;
             pointer.now.scroll_y = handsfree_state.scroll_y;
+            if pointer.mouse {
+                // wheel notches since the last frame, consumed here
+                pointer.now.scroll_y = std::mem::take(&mut mouse_ray.push);
+            }
 
             // skip action loading
             return Ok(());
@@ -435,6 +453,7 @@ impl OpenXrPointer {
         do_lerp: bool,
     ) -> anyhow::Result<()> {
         pointer.handsfree = false;
+        pointer.mouse = false;
         self.pointer_load_pose(
             pointer,
             xr,

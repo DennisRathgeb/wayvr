@@ -58,7 +58,7 @@ use wgui::{gfx::WGfx, globals::WguiGlobals, log::LogErr};
 use wlx_capture::frame::Transform;
 use wlx_common::{
     audio::{AudioSystem, SamplePlayer},
-    config::{DefaultPositioning, GeneralConfig, InputCaptureMethod},
+    config::{DefaultPositioning, GeneralConfig, HandsfreePointer, InputCaptureMethod},
     desktop_finder::DesktopFinder,
 };
 use xkbcommon::xkb;
@@ -149,6 +149,10 @@ pub struct WvrServerState {
     input_capture_init_attempted: bool,
     has_input_focus: bool,
     grab_toast_sent: bool,
+    /// The pointer mode before the capture switched it to the mouse pointer
+    pointer_before_capture: Option<HandsfreePointer>,
+    /// Children of the capture hook (WAYVR_CAPTURE_HOOK), reaped on the next hook call
+    hook_children: Vec<std::process::Child>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -307,6 +311,8 @@ impl WvrServerState {
             input_capture_init_attempted: false,
             has_input_focus: false,
             grab_toast_sent: false,
+            pointer_before_capture: None,
+            hook_children: Vec::new(),
         })
     }
 
@@ -655,7 +661,7 @@ impl WvrServerState {
             &mut app.audio_sample_player,
             &mut app.audio_system,
             &app.wgui_globals,
-            &app.session.config,
+            &mut app.session.config,
         );
 
         wvr_server.ticks += 1;
@@ -777,7 +783,7 @@ impl WvrServerState {
         audio_sample_player: &mut SamplePlayer,
         audio_system: &mut AudioSystem,
         globals: &WguiGlobals,
-        config: &GeneralConfig,
+        config: &mut GeneralConfig,
     ) {
         let input_capture = match (self.input_capture.as_mut(), config.wvr_input_capture) {
             (Some(cap), InputCaptureMethod::Evdev) => cap,
@@ -890,6 +896,25 @@ impl WvrServerState {
                         }
                     } else if self.has_input_focus {
                         self.manager.send_pointer_button(mouse_index, pressed);
+                    } else if matches!(config.handsfree_pointer, HandsfreePointer::Mouse) {
+                        // the mouse pointer: buttons act where the ray points. In edit mode the
+                        // left button grabs the panel instead of clicking into it.
+                        let edit_mode = input_state.edit_mode;
+                        let st = &mut input_state.handsfree_state;
+                        match mouse_index {
+                            MouseIndex::Left if st.grab && !pressed => st.grab = false,
+                            MouseIndex::Left if edit_mode => st.grab = pressed,
+                            MouseIndex::Left => st.click = pressed,
+                            MouseIndex::Right if !edit_mode => {
+                                st.click = pressed;
+                                st.click_modifier_right = pressed;
+                            }
+                            MouseIndex::Center if !edit_mode => {
+                                st.click = pressed;
+                                st.click_modifier_middle = pressed;
+                            }
+                            _ => {}
+                        }
                     } else {
                         hid_wrapper.inner.send_button(button as u16, pressed);
                     }
@@ -918,6 +943,11 @@ impl WvrServerState {
                         input_state.handsfree_state.scroll_y = (vertical_v120 as f32) * -0.12;
                     } else if self.has_input_focus {
                         self.manager.send_pointer_axis_wheel_raw(delta);
+                    } else if matches!(config.handsfree_pointer, HandsfreePointer::Mouse)
+                        && (input_state.edit_mode || input_state.handsfree_state.grab)
+                    {
+                        // wheel notches move the panel under the pointer: up = nearer
+                        input_state.mouse_ray.push -= vertical_v120 as f32 / 120.0;
                     } else {
                         delta.y *= -1.0;
                         hid_wrapper.inner.wheel(delta);
@@ -930,16 +960,43 @@ impl WvrServerState {
                         let text = &globals.i18n().translate("NOTIFICATION.WE_ARE_GRABBING");
                         let _ = DbusConnector::notify_send("WayVR", &text, 1, 5000, 0, true);
                     }
+                    // the captured mouse steers a ray from the head, starting where the head looks
+                    if !matches!(config.handsfree_pointer, HandsfreePointer::Mouse) {
+                        self.pointer_before_capture = Some(config.handsfree_pointer);
+                        config.handsfree_pointer = HandsfreePointer::Mouse;
+                    }
+                    input_state.handsfree_state = Default::default();
+                    input_state.mouse_ray.aim_like(&input_state.hmd);
+                    input_state.mouse_ray.push = 0.0;
+                    self.run_capture_hook("grabbed");
                 }
                 input_capture::CapturedEvent::Ungrabbed => {
-                    hid_wrapper.inner.send_key(hid::VirtualKey::LSuper, false);
-                    hid_wrapper.inner.send_key(hid::VirtualKey::RSuper, false);
+                    for key in [
+                        hid::VirtualKey::LSuper,
+                        hid::VirtualKey::RSuper,
+                        hid::VirtualKey::LAlt,
+                    ] {
+                        hid_wrapper.inner.send_key(key, false);
+                    }
                     self.manager.release_all_keys();
                     self.has_input_focus = false;
                     self.wm.keyboard_focus = None;
                     audio_sample_player.play_sample(audio_system, "input_ungrab");
+                    // back to the pointer mode from before; a panel still held is let go, and
+                    // edit mode ends with the mouse
+                    if let Some(mode) = self.pointer_before_capture.take() {
+                        config.handsfree_pointer = mode;
+                    }
+                    input_state.handsfree_state = Default::default();
+                    if input_state.edit_mode {
+                        tasks.enqueue(TaskType::Overlay(OverlayTask::ToggleEditMode));
+                    }
+                    self.run_capture_hook("ungrabbed");
                 }
                 input_capture::CapturedEvent::KeyCombo { combo, pressed } => match combo {
+                    input_capture::KeyCombo::EditMode if pressed => {
+                        tasks.enqueue(TaskType::Overlay(OverlayTask::ToggleEditMode));
+                    }
                     input_capture::KeyCombo::CloseApp if pressed => {
                         if let Some(hover) = self.wm.mouse.as_mut() {
                             let window_handle = hover.hover_window;
@@ -1020,10 +1077,42 @@ impl WvrServerState {
                         hover.hover_window,
                     );
                 }
+            } else if matches!(config.handsfree_pointer, HandsfreePointer::Mouse) {
+                // the mouse turns the pointer ray; the desktop cursor follows the ray's hit
+                input_state.mouse_ray.turn(
+                    mouse_delta.x as f32,
+                    mouse_delta.y as f32,
+                    config.mouse_pointer_sensitivity,
+                );
             } else {
                 // no has_input_focus → send back to desktop
                 hid_wrapper.inner.mouse_move_rel(mouse_delta);
             }
+        }
+    }
+
+    /// Grab or release mouse and keyboard, e.g. from `wayvrctl input-capture`.
+    pub fn set_capture_grabbed(&self, grabbed: bool) {
+        if let Some(cap) = self.input_capture.as_ref() {
+            let _ = cap
+                .set_grabbed(grabbed)
+                .log_err("Could not change the input capture");
+        } else if grabbed {
+            log::warn!("Input capture requested, but it is not enabled (wvr_input_capture)");
+        }
+    }
+
+    /// Run the command in WAYVR_CAPTURE_HOOK with "grabbed" or "ungrabbed", e.g. to show a
+    /// notice on the physical screens while the mouse is in the glasses.
+    fn run_capture_hook(&mut self, state: &str) {
+        self.hook_children
+            .retain_mut(|child| matches!(child.try_wait(), Ok(None)));
+        let Ok(hook) = std::env::var("WAYVR_CAPTURE_HOOK") else {
+            return;
+        };
+        match std::process::Command::new(&hook).arg(state).spawn() {
+            Ok(child) => self.hook_children.push(child),
+            Err(error) => log::warn!("Capture hook {hook} {state}: {error}"),
         }
     }
 

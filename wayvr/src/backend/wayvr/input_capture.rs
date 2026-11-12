@@ -34,6 +34,8 @@ const POLL_TIMEOUT_MS: i32 = 20;
 pub enum KeyCombo {
     SwitchApp,
     CloseApp,
+    /// Toggle edit mode (move panels with the mouse)
+    EditMode,
     /// Always consumed by InputCapture internally
     GrabRelease,
 }
@@ -117,6 +119,13 @@ impl InputCapture {
         }
     }
 
+    /// Grab (mouse and keyboard go to WayVR) or release the input devices, e.g. from IPC.
+    pub fn set_grabbed(&self, grabbed: bool) -> anyhow::Result<()> {
+        self.command_tx
+            .try_send(Command::SetGrabbed(grabbed))
+            .map_err(|error| anyhow::anyhow!("worker thread unreachable: {error}"))
+    }
+
     /// Returns every currently queued event without blocking.
     pub fn drain_events(&self) -> Vec<CapturedEvent> {
         let _ = self.command_tx.try_send(Command::ResetWatchdog);
@@ -148,8 +157,7 @@ impl Drop for InputCapture {
 
 enum Command {
     ResetWatchdog,
-    #[allow(dead_code)]
-    SetGrabbed(bool), // might need later?
+    SetGrabbed(bool),
     SetPointerAccel {
         accel: bool,
         speed: f32,
@@ -575,7 +583,7 @@ fn process_libinput_event(par: ProcessLibinputEventParams) -> ProcessResult {
             }
 
             // while grabbed, these combos get emitted as normal
-            for combo in [KeyCombo::SwitchApp, KeyCombo::CloseApp] {
+            for combo in [KeyCombo::SwitchApp, KeyCombo::CloseApp, KeyCombo::EditMode] {
                 let mut combo_pressed = key_combo_is_pressed(combo, &state.pressed_keys);
                 let was_pressed = state.active_combos.contains(&combo);
 
@@ -899,8 +907,18 @@ fn mod_super(pressed: &HashSet<u16>) -> bool {
 fn key_combo_is_pressed(combo: KeyCombo, pressed: &HashSet<u16>) -> bool {
     match combo {
         KeyCombo::CloseApp => mod_alt(pressed) && pressed.contains(&KeyCode::KEY_F4.0),
-        KeyCombo::GrabRelease => mod_super(pressed) && pressed.contains(&KeyCode::KEY_Z.0),
-        KeyCombo::SwitchApp => mod_super(pressed) && pressed.contains(&KeyCode::KEY_X.0),
+        // Meta+Alt+M: mouse and keyboard between the desktop and the glasses
+        KeyCombo::GrabRelease => {
+            mod_super(pressed) && mod_alt(pressed) && pressed.contains(&KeyCode::KEY_M.0)
+        }
+        // Meta+Alt+E: edit mode
+        KeyCombo::EditMode => {
+            mod_super(pressed) && mod_alt(pressed) && pressed.contains(&KeyCode::KEY_E.0)
+        }
+        // Meta+X without Alt, so Meta+Alt+X stays free for the desktop
+        KeyCombo::SwitchApp => {
+            mod_super(pressed) && !mod_alt(pressed) && pressed.contains(&KeyCode::KEY_X.0)
+        }
     }
 }
 

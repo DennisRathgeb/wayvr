@@ -334,6 +334,7 @@ impl Connection {
         params
             .hid_wrapper
             .set_input_focus(Some(params.wvr_server), val);
+        params.wvr_server.set_capture_grabbed(grab);
     }
 
     fn handle_wlx_device_haptics(
