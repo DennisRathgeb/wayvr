@@ -8,7 +8,7 @@ use wlx_capture::{WlxCapture, frame::Transform};
 
 use crate::{
     XrBackend,
-    backend::input::{HoverResult, PointerHit, PointerMode},
+    backend::input::{HoverResult, OnScreen, PointerHit, PointerMode},
     overlays::screen::capture::MyFirstDmaExporter,
     state::AppState,
     subsystem::{
@@ -303,6 +303,27 @@ impl OverlayBackend for ScreenBackend {
                 .set_input_focus(app.wvr_server.as_mut(), InputFocus::PhysicalScreen);
         }
 
+        if app.input_state.pointers[hit.pointer].mouse {
+            // The mouse pointer reached this screen: from here the real mouse drives it directly
+            // (see mouse_pointer_step), starting at the spot the ray hit. Not in edit mode, and
+            // not while a button is held in space.
+            if app.input_state.mouse_ray.on_screen.is_none()
+                && !app.input_state.edit_mode
+                && !app.input_state.handsfree_state.click
+                && !app.input_state.handsfree_state.grab
+            {
+                let pos = self.mouse_transform.transform_point2(hit.uv);
+                app.hid_provider
+                    .inner
+                    .mouse_move(DVec2::new(pos.x as _, pos.y as _));
+                app.input_state.mouse_ray.on_screen = Some(OnScreen {
+                    overlay: hit.overlay,
+                    cursor: pos,
+                });
+            }
+            return HoverResult::consume();
+        }
+
         if can_move()
             && !app.input_state.edit_mode
             && (!app.session.config.focus_follows_mouse_mode
@@ -358,6 +379,9 @@ impl OverlayBackend for ScreenBackend {
 
     fn get_interaction_transform(&mut self) -> Option<Affine2> {
         self.interaction_transform
+    }
+    fn get_mouse_transform(&self) -> Option<Affine2> {
+        Some(self.mouse_transform)
     }
     fn get_attrib(&self, attrib: BackendAttrib) -> Option<BackendAttribValue> {
         match attrib {

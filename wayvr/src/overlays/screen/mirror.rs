@@ -66,6 +66,9 @@ impl OverlayBackend for MirrorBackend {
     fn get_interaction_transform(&mut self) -> Option<Affine2> {
         self.0.get_interaction_transform()
     }
+    fn get_mouse_transform(&self) -> Option<Affine2> {
+        self.0.get_mouse_transform()
+    }
     fn get_attrib(&self, attrib: BackendAttrib) -> Option<BackendAttribValue> {
         self.0.get_attrib(attrib)
     }

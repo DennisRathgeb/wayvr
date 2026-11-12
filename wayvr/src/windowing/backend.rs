@@ -158,6 +158,10 @@ pub trait OverlayBackend: Any {
     fn on_pointer(&mut self, app: &mut AppState, hit: &PointerHit, pressed: bool);
     fn on_scroll(&mut self, app: &mut AppState, hit: &PointerHit, delta: WheelDelta);
     fn get_interaction_transform(&mut self) -> Option<Affine2>;
+    /// For panels that mirror a desktop screen: maps the panel's uv to desktop pixels.
+    fn get_mouse_transform(&self) -> Option<Affine2> {
+        None
+    }
     fn get_attrib(&self, attrib: BackendAttrib) -> Option<BackendAttribValue>;
     fn set_attrib(&mut self, app: &mut AppState, value: BackendAttribValue) -> bool;
 }
