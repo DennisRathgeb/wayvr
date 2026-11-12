@@ -53,3 +53,17 @@ pub mod frag_sky {
         path: "src/shaders/sky.frag",
     }
 }
+
+pub mod vert_relief {
+    vulkano_shaders::shader! {
+        ty: "vertex",
+        path: "src/shaders/relief.vert"
+    }
+}
+
+pub mod frag_relief {
+    vulkano_shaders::shader! {
+        ty: "fragment",
+        path: "src/shaders/relief.frag",
+    }
+}

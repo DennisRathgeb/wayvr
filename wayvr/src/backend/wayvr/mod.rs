@@ -494,6 +494,8 @@ impl WvrServerState {
                             None => DesktopFinder::create_icon(&title)?.into(),
                         };
 
+                        let relief_title = title.clone();
+                        let relief_icon = icon.clone();
                         app.tasks.enqueue(TaskType::Overlay(OverlayTask::Spawn(
                             OverlaySelector::Nothing,
                             spawn_pos,
@@ -511,6 +513,24 @@ impl WvrServerState {
                                 .ok()
                             }),
                         )));
+
+                        if crate::overlays::relief::enabled() {
+                            app.tasks.enqueue(TaskType::Overlay(OverlayTask::Spawn(
+                                OverlaySelector::Nothing,
+                                SpawnPos::Spread,
+                                Box::new(move |app: &mut AppState| {
+                                    crate::overlays::relief::create_relief_overlay(
+                                        relief_title,
+                                        app,
+                                        window_handle,
+                                        relief_icon,
+                                    )
+                                    .context("Could not create the relief overlay")
+                                    .inspect_err(|e| log::warn!("{e:?}"))
+                                    .ok()
+                                }),
+                            )));
+                        }
                     }
                 }
                 WayVRTask::DropToplevel(client_id, toplevel) => {

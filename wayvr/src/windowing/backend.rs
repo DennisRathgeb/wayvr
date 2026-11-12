@@ -153,6 +153,9 @@ pub trait OverlayBackend: Any {
 
     fn notify(&mut self, app: &mut AppState, event_data: OverlayEventData) -> anyhow::Result<()>;
 
+    /// Called every frame before rendering with the overlay's pose in the stage space.
+    fn set_world_transform(&mut self, _transform: Affine3A) {}
+
     fn on_hover(&mut self, app: &mut AppState, hit: &PointerHit) -> HoverResult;
     fn on_left(&mut self, app: &mut AppState, pointer: usize);
     fn on_pointer(&mut self, app: &mut AppState, hit: &PointerHit, pressed: bool);
