@@ -3,7 +3,7 @@ use std::process::{Child, Command};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use glam::{Affine2, Affine3A, Quat, Vec2, Vec3A, Vec3Swizzles};
+use glam::{Affine3A, Quat, Vec2, Vec3A, Vec3Swizzles};
 
 use idmap_derive::IntegerId;
 use smallvec::{SmallVec, smallvec};
@@ -75,21 +75,6 @@ pub struct MouseRay {
     /// Wheel notches since the last frame (positive = wheel up = nearer); consumed once a frame
     /// to push or pull the panel under the pointer.
     pub push: f32,
-    /// Mouse motion since the last frame, consumed in `mouse_pointer_step`.
-    pub delta: Vec2,
-    /// Set while the cursor is on a mirrored screen: the real mouse drives that screen directly
-    /// and the ray only follows it.
-    pub on_screen: Option<OnScreen>,
-    /// Buttons that went down on a screen and so were sent to the desktop directly (bit per
-    /// button); their release goes the same way.
-    pub native_buttons: u8,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct OnScreen {
-    pub overlay: OverlayID,
-    /// Desktop position of the cursor, in the coordinates of the virtual mouse
-    pub cursor: Vec2,
 }
 
 impl MouseRay {
@@ -111,126 +96,6 @@ impl MouseRay {
     pub fn rotation(&self) -> Quat {
         Quat::from_rotation_y(self.yaw) * Quat::from_rotation_x(self.pitch)
     }
-
-    fn pose(&self, origin: Vec3A) -> Affine3A {
-        Affine3A::from_rotation_translation(self.rotation(), origin.into())
-    }
-
-    /// Turn the ray so that, from `origin`, it hits the panel at `target` (uv; may lie a little
-    /// outside 0..1). Newton steps on the panel's own ray test, so flat and curved panels work
-    /// alike. Returns false and leaves the ray alone when it does not converge.
-    fn aim_at_uv(
-        &mut self,
-        origin: Vec3A,
-        overlay: OverlayID,
-        panel: &Affine3A,
-        curvature: Option<&f32>,
-        interaction: &Affine2,
-        target: Vec2,
-    ) -> bool {
-        let uv_of = |ray: &Self| {
-            ray_test(&ray.pose(origin), overlay, panel, curvature)
-                .map(|hit| interaction.transform_point2(hit.local_pos))
-                .filter(|uv| uv.is_finite())
-        };
-        let mut ray = *self;
-        if uv_of(&ray).is_none() {
-            // start from the panel's centre
-            let dir = (panel.translation - origin).normalize_or_zero();
-            ray.yaw = (-dir.x).atan2(-dir.z);
-            ray.pitch = dir.y.clamp(-1.0, 1.0).asin();
-        }
-        const H: f32 = 1e-3;
-        for _ in 0..8 {
-            let Some(uv) = uv_of(&ray) else { return false };
-            let err = target - uv;
-            if err.length_squared() < 1e-10 {
-                break;
-            }
-            let (mut ry, mut rp) = (ray, ray);
-            ry.yaw += H;
-            rp.pitch += H;
-            let (Some(uy), Some(up)) = (uv_of(&ry), uv_of(&rp)) else {
-                return false;
-            };
-            let (dy, dp) = ((uy - uv) / H, (up - uv) / H);
-            let det = dy.x * dp.y - dp.x * dy.y;
-            if det.abs() < 1e-9 {
-                return false;
-            }
-            ray.yaw += (err.x * dp.y - dp.x * err.y) / det;
-            ray.pitch = (ray.pitch + (dy.x * err.y - err.x * dy.y) / det)
-                .clamp(-Self::MAX_PITCH, Self::MAX_PITCH);
-        }
-        let ok = uv_of(&ray).is_some_and(|uv| (target - uv).length_squared() < 1e-6);
-        if ok {
-            self.yaw = ray.yaw.rem_euclid(2.0 * PI);
-            self.pitch = ray.pitch;
-        }
-        ok
-    }
-}
-
-/// The mouse pointer, once a frame, before the hit tests. On a mirrored screen the motion moves
-/// the desktop cursor itself (a normal mouse: drags, selection, hover), and the ray follows the
-/// cursor. Running off that screen's edge hands over to the ray, which then moves through space
-/// until it points at a screen again (`ScreenBackend::on_hover` hands back).
-fn mouse_pointer_step<O>(overlays: &mut OverlayWindowManager<O>, app: &mut AppState)
-where
-    O: Default,
-{
-    let delta = std::mem::take(&mut app.input_state.mouse_ray.delta);
-    if !app.input_state.pointers[0].mouse {
-        app.input_state.mouse_ray.on_screen = None;
-        return;
-    }
-    let origin = app.input_state.hmd.translation;
-    let sensitivity = app.session.config.mouse_pointer_sensitivity;
-    if overlays.get_edit_mode() && app.input_state.mouse_ray.native_buttons == 0 {
-        app.input_state.mouse_ray.on_screen = None;
-    }
-
-    let screen = app.input_state.mouse_ray.on_screen.and_then(|on| {
-        let overlay = overlays.mut_by_id(on.overlay)?;
-        let state = overlay.config.active_state.as_ref()?;
-        let (panel, curvature) = (state.transform, state.curvature);
-        let interaction = overlay.config.backend.get_interaction_transform()?;
-        let mouse = overlay.config.backend.get_mouse_transform()?;
-        Some((on, panel, curvature, interaction, mouse))
-    });
-
-    let ray = &mut app.input_state.mouse_ray;
-    if let Some((on, panel, curvature, interaction, mouse)) = screen {
-        let uv = mouse.inverse().transform_point2(on.cursor + delta);
-        let inside = (0.0..=1.0).contains(&uv.x) && (0.0..=1.0).contains(&uv.y);
-        let held = ray.native_buttons != 0;
-        let uv_in = uv.clamp(Vec2::ZERO, Vec2::ONE);
-        let cursor = mouse.transform_point2(uv_in);
-        if delta != Vec2::ZERO {
-            app.hid_provider
-                .inner
-                .mouse_move(glam::DVec2::new(cursor.x as _, cursor.y as _));
-        }
-        if inside || held {
-            ray.on_screen = Some(OnScreen { cursor, ..on });
-            ray.aim_at_uv(origin, on.overlay, &panel, curvature.as_ref(), &interaction, uv_in);
-        } else {
-            // off the edge: the ray takes over just outside the panel, so it does not re-enter
-            // until the mouse comes back
-            const OUT: f32 = 0.01;
-            let uv_out = uv.clamp(Vec2::splat(-OUT), Vec2::splat(1.0 + OUT));
-            ray.on_screen = None;
-            ray.aim_at_uv(origin, on.overlay, &panel, curvature.as_ref(), &interaction, uv_out);
-        }
-    } else {
-        ray.on_screen = None;
-        ray.turn(delta.x, delta.y, sensitivity);
-    }
-
-    let pose = ray.pose(origin);
-    let pointer = &mut app.input_state.pointers[0];
-    pointer.pose = pose;
-    pointer.raw_pose = pose;
 }
 
 pub struct InputState {
@@ -640,7 +505,6 @@ where
     O: Default,
 {
     app.input_state.edit_mode = overlays.get_edit_mode();
-    mouse_pointer_step(overlays, app);
 
     let hits = if app.input_state.pointers[1].last_click > app.input_state.pointers[0].last_click {
         let right = interact_hand(1, overlays, app);
@@ -653,10 +517,6 @@ where
     };
 
     for (idx, hit) in hits.iter().enumerate() {
-        if app.input_state.pointers[idx].mouse && app.input_state.mouse_ray.on_screen.is_some() {
-            // the desktop cursor in the mirror is the cursor; no crosshair on top of it
-            continue;
-        }
         populate_lines(
             lines,
             &app.input_state.pointers[idx],

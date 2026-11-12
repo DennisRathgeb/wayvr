@@ -900,20 +900,6 @@ impl WvrServerState {
                         // the mouse pointer: buttons act where the ray points. In edit mode the
                         // left button grabs the panel instead of clicking into it.
                         let edit_mode = input_state.edit_mode;
-                        let bit = 1u8 << (button.saturating_sub(272)).min(7);
-                        let ray = &mut input_state.mouse_ray;
-                        if (pressed && ray.on_screen.is_some() && !edit_mode)
-                            || (!pressed && ray.native_buttons & bit != 0)
-                        {
-                            // on a mirrored screen the button is the desktop's, like the motion
-                            if pressed {
-                                ray.native_buttons |= bit;
-                            } else {
-                                ray.native_buttons &= !bit;
-                            }
-                            hid_wrapper.inner.send_button(button as u16, pressed);
-                            continue;
-                        }
                         let st = &mut input_state.handsfree_state;
                         match mouse_index {
                             MouseIndex::Left if st.grab && !pressed => st.grab = false,
@@ -980,8 +966,8 @@ impl WvrServerState {
                         config.handsfree_pointer = HandsfreePointer::Mouse;
                     }
                     input_state.handsfree_state = Default::default();
-                    input_state.mouse_ray = Default::default();
                     input_state.mouse_ray.aim_like(&input_state.hmd);
+                    input_state.mouse_ray.push = 0.0;
                     self.run_capture_hook("grabbed");
                 }
                 input_capture::CapturedEvent::Ungrabbed => {
@@ -1002,12 +988,6 @@ impl WvrServerState {
                         config.handsfree_pointer = mode;
                     }
                     input_state.handsfree_state = Default::default();
-                    for i in 0..8u16 {
-                        if input_state.mouse_ray.native_buttons & (1 << i) != 0 {
-                            hid_wrapper.inner.send_button(272 + i, false);
-                        }
-                    }
-                    input_state.mouse_ray = Default::default();
                     if input_state.edit_mode {
                         tasks.enqueue(TaskType::Overlay(OverlayTask::ToggleEditMode));
                     }
@@ -1099,8 +1079,11 @@ impl WvrServerState {
                 }
             } else if matches!(config.handsfree_pointer, HandsfreePointer::Mouse) {
                 // the mouse turns the pointer ray; the desktop cursor follows the ray's hit
-                input_state.mouse_ray.delta +=
-                    Vec2::new(mouse_delta.x as f32, mouse_delta.y as f32);
+                input_state.mouse_ray.turn(
+                    mouse_delta.x as f32,
+                    mouse_delta.y as f32,
+                    config.mouse_pointer_sensitivity,
+                );
             } else {
                 // no has_input_focus → send back to desktop
                 hid_wrapper.inner.mouse_move_rel(mouse_delta);

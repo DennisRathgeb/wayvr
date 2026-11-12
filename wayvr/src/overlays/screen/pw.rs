@@ -234,9 +234,6 @@ impl OverlayBackend for ScreenCastBackend {
     fn get_interaction_transform(&mut self) -> Option<glam::Affine2> {
         self.panel.get_interaction_transform()
     }
-    fn get_mouse_transform(&self) -> Option<glam::Affine2> {
-        self.panel.get_mouse_transform()
-    }
     fn get_attrib(
         &self,
         _attrib: wlx_common::overlays::BackendAttrib,

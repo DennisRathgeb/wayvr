@@ -344,9 +344,6 @@ impl OverlayBackend for EditModeBackendWrapper {
     fn get_interaction_transform(&mut self) -> Option<glam::Affine2> {
         self.inner.get_interaction_transform()
     }
-    fn get_mouse_transform(&self) -> Option<glam::Affine2> {
-        self.inner.get_mouse_transform()
-    }
     fn get_attrib(&self, attrib: BackendAttrib) -> Option<BackendAttribValue> {
         self.inner.get_attrib(attrib)
     }
