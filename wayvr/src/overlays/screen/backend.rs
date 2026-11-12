@@ -295,6 +295,7 @@ impl OverlayBackend for ScreenBackend {
                     self.logical_size.x,
                     self.logical_size.y,
                 ],
+                cursor_image: self.capture.cursor_image(),
             },
         );
         let pipeline = self.pipeline.as_mut().unwrap();

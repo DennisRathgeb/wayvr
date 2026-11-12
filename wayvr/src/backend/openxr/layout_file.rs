@@ -188,6 +188,44 @@ fn apply_regions(
             })
     };
     ghost_screens(app, overlays, list.hide_screen && !list.regions.is_empty());
+    app.region_popups = list
+        .regions
+        .iter()
+        .filter(|r| r.popup)
+        .map(|r| region::OpenPopup {
+            parent: r.parent.clone(),
+            rect: r.rect,
+        })
+        .collect();
+    // A pop-up sits on its parent's panel, wherever that is now: at the offset it has from the
+    // parent on the desktop, a little in front, at the parent's scale. Returns pose and width.
+    let rects: HashMap<String, [f32; 4]> = list
+        .regions
+        .iter()
+        .map(|r| (r.id.clone(), r.rect))
+        .collect();
+    let popup_pose = |r: &RegionSpec| -> Option<(Vec<f32>, f32)> {
+        let parent = r.parent.as_ref()?;
+        let prect = rects.get(parent)?;
+        let name = region::overlay_name(parent);
+        let o = overlays.values().find(|o| o.config.name == name)?;
+        let t = o.config.active_state.as_ref()?.transform;
+        let scale = t.matrix3.col(0).length();
+        let aspect = (prect[2] / prect[3].max(1.0)).max(0.01);
+        let parent_width = if aspect < 1.0 { scale * aspect } else { scale };
+        let mpp = parent_width / prect[2].max(1.0);
+        let (_, rotation, _) = Mat4::from(t).to_scale_rotation_translation();
+        let dx = (r.rect[0] + r.rect[2] / 2.0) - (prect[0] + prect[2] / 2.0);
+        let dy = (r.rect[1] + r.rect[3] / 2.0) - (prect[1] + prect[3] / 2.0);
+        let pos = glam::Vec3::from(t.translation)
+            + rotation * glam::Vec3::new(dx * mpp, -dy * mpp, 0.012);
+        Some((
+            Mat4::from_rotation_translation(rotation, pos)
+                .to_cols_array()
+                .to_vec(),
+            r.rect[2] * mpp,
+        ))
+    };
     REGIONS.with_borrow_mut(|known| {
         known.retain(|id, _| {
             let keep = list.regions.iter().any(|r| &r.id == id);
@@ -199,9 +237,14 @@ fn apply_regions(
             keep
         });
         for mut r in list.regions {
-            let width_m = r.rect[2] * density(r.screen.as_deref());
+            let mut width_m = r.rect[2] * density(r.screen.as_deref());
             let is_new = !known.contains_key(&r.id);
-            if is_new && r.pose.is_none() {
+            if r.popup
+                && let Some((pose, width)) = popup_pose(&r)
+            {
+                r.pose = Some(pose);
+                width_m = width;
+            } else if is_new && r.pose.is_none() {
                 r.pose = default_pose(&r);
             }
             let pose = r.pose.clone().filter(|p| p.len() == 16);

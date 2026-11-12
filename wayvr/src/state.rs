@@ -61,6 +61,8 @@ pub struct AppState {
     pub screens: SmallVec<[ScreenMeta; 8]>,
     /// The latest picture of each mirrored screen, for the region panels cut from it.
     pub screen_frames: std::collections::HashMap<Arc<str>, crate::overlays::region::ScreenFrame>,
+    /// The pop-ups that are open on the desktop, for the regions they cover.
+    pub region_popups: Vec<crate::overlays::region::OpenPopup>,
     pub anchor: Affine3A,
     pub anchor_grabbed: bool,
 
@@ -206,6 +208,7 @@ impl AppState {
             input_state: InputState::new(),
             screens: smallvec![],
             screen_frames: std::collections::HashMap::new(),
+            region_popups: Vec::new(),
             anchor: Affine3A::IDENTITY,
             anchor_grabbed: false,
             wgui_theme: Rc::new(theme),
