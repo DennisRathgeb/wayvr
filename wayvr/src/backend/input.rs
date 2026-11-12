@@ -106,6 +106,8 @@ impl MouseRay {
 
 pub struct InputState {
     pub hmd: Affine3A,
+    /// Left and right eye in the stage space.
+    pub eyes: [glam::Vec3A; 2],
     pub ipd: f32,
     pub pointers: [Pointer; 2],
     pub devices: Vec<TrackedDevice>,
@@ -125,6 +127,7 @@ impl InputState {
     pub fn new() -> Self {
         Self {
             hmd: Affine3A::IDENTITY,
+            eyes: [glam::Vec3A::ZERO; 2],
             ipd: 0.0,
             pointers: [Pointer::new(0), Pointer::new(1)],
             devices: Vec::new(),

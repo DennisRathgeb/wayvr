@@ -91,6 +91,12 @@ impl WGfxExtras {
         let shader = frag_simple::load(gfx.device.clone())?;
         shaders.insert("frag_simple", shader);
 
+        let shader = crate::shaders::vert_relief::load(gfx.device.clone())?;
+        shaders.insert("vert_relief", shader);
+
+        let shader = crate::shaders::frag_relief::load(gfx.device.clone())?;
+        shaders.insert("frag_relief", shader);
+
         let drm_formats = get_drm_formats(gfx.device.clone()).into();
 
         let vertices = [

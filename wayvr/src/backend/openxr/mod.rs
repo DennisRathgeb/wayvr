@@ -347,6 +347,11 @@ pub fn openxr_run(args: &Args, params: RunParams) -> Result<(), BackendError> {
             &xr_state.stage,
         )?;
 
+        for (eye, view) in app.input_state.eyes.iter_mut().zip(views.iter()) {
+            let p = view.pose.position;
+            *eye = glam::Vec3A::new(p.x, p.y, p.z);
+        }
+
         let ipd = helpers::ipd_from_views(&views);
         if (app.input_state.ipd - ipd).abs() > 0.05 {
             log::info!("IPD changed: {} -> {}", app.input_state.ipd, ipd);
@@ -440,6 +445,10 @@ pub fn openxr_run(args: &Args, params: RunParams) -> Result<(), BackendError> {
             {
                 log::trace!("{}: hidden, skip render", o.config.name);
                 continue;
+            }
+
+            if let Some(state) = o.config.active_state.as_ref() {
+                o.config.backend.set_world_transform(state.transform);
             }
 
             if !o.data.init {
