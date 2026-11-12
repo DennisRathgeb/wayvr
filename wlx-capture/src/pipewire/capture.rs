@@ -33,6 +33,7 @@ use spa::utils::ChoiceFlags;
 
 use crate::WlxCapture;
 use crate::frame::FrameFormat;
+use crate::frame::CursorImage;
 use crate::frame::MouseMeta;
 use crate::frame::Transform;
 use crate::frame::WlxFrame;
@@ -69,6 +70,8 @@ where
     handle: Option<JoinHandle<Result<(), Error>>>,
     /// Latest cursor position from the stream's cursor metadata
     cursor: Arc<Mutex<Option<MouseMeta>>>,
+    /// Latest cursor picture from the same metadata
+    cursor_image: Arc<Mutex<Option<Arc<CursorImage>>>>,
 }
 
 impl<R> PipewireCapture<R>
@@ -82,6 +85,7 @@ where
             node_id,
             handle: None,
             cursor: Arc::new(Mutex::new(None)),
+            cursor_image: Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -121,12 +125,14 @@ where
             let node_id = self.node_id;
             let formats = dmabuf_formats.to_vec();
             let cursor = self.cursor.clone();
+            let cursor_image = self.cursor_image.clone();
 
             move || {
                 main_loop::<U, R>(
                     name,
                     node_id,
                     cursor,
+                    cursor_image,
                     formats,
                     tx_frame,
                     rx_ctrl,
@@ -177,6 +183,9 @@ where
     fn cursor(&self) -> Option<MouseMeta> {
         self.cursor.lock().ok().and_then(|c| c.clone())
     }
+    fn cursor_image(&self) -> Option<Arc<CursorImage>> {
+        self.cursor_image.lock().ok().and_then(|c| c.clone())
+    }
     fn request_new_frame(&mut self) {}
 }
 
@@ -184,6 +193,7 @@ fn main_loop<U, R>(
     name: Arc<str>,
     node_id: u32,
     cursor: Arc<Mutex<Option<MouseMeta>>>,
+    cursor_image: Arc<Mutex<Option<Arc<CursorImage>>>>,
     dmabuf_formats: Vec<DrmFormat>,
     sender: mpsc::SyncSender<R>,
     receiver: pw::channel::Receiver<PwChangeRequest>,
@@ -320,6 +330,13 @@ where
                                 None => "missing",
                             }
                         );
+                    }
+                    // a new picture comes only when the pointer's shape changes
+                    if let Some(c) = cursor_meta
+                        && let Some(image) = cursor_image_from_meta(c, format)
+                        && let Ok(mut cur) = cursor_image.lock()
+                    {
+                        *cur = Some(Arc::new(image));
                     }
                     if let Some(c) = cursor_meta
                         && let Ok(mut cur) = cursor.lock()
@@ -557,6 +574,49 @@ fn get_meta_object(key: u32, size: usize) -> Object {
         meta_type_property,
         meta_size_property,
     )
+}
+
+/// The cursor's picture from the metadata, if this buffer carries one: RGBA or BGRA with
+/// premultiplied alpha becomes plain RGBA.
+fn cursor_image_from_meta(cursor: &MetaCursor, format: &FrameFormat) -> Option<CursorImage> {
+    let bitmap = cursor.bitmap()?;
+    let (w, h) = (bitmap.size().width, bitmap.size().height);
+    let stride = bitmap.stride().unsigned_abs() as usize;
+    let data = bitmap.bitmap_data()?;
+    let swap_rb = match bitmap.format() {
+        VideoFormat::RGBA | VideoFormat::RGBx => false,
+        VideoFormat::BGRA | VideoFormat::BGRx => true,
+        _ => return None,
+    };
+    if w == 0 || h == 0 || w > 1024 || h > 1024 || stride < w as usize * 4 || format.width == 0 {
+        return None;
+    }
+    let mut rgba = Vec::with_capacity((w * h * 4) as usize);
+    for row in data.chunks(stride).take(h as usize) {
+        for px in row[..w as usize * 4].chunks_exact(4) {
+            let a = px[3];
+            let un = |c: u8| {
+                if a == 0 {
+                    0
+                } else {
+                    ((u32::from(c) * 255 + u32::from(a) / 2) / u32::from(a)).min(255) as u8
+                }
+            };
+            let (r, b) = if swap_rb { (px[2], px[0]) } else { (px[0], px[2]) };
+            rgba.extend_from_slice(&[un(r), un(px[1]), un(b), a]);
+        }
+    }
+    if rgba.len() != (w * h * 4) as usize {
+        return None;
+    }
+    let (fw, fh) = (format.width as f32, format.height as f32);
+    Some(CursorImage {
+        width: w,
+        height: h,
+        rgba,
+        size: [w as f32 / fw, h as f32 / fh],
+        hotspot: [cursor.hotspot().x as f32 / fw, cursor.hotspot().y as f32 / fh],
+    })
 }
 
 fn get_cursor_meta_object() -> Object {

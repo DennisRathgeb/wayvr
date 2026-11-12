@@ -39,4 +39,9 @@ pub trait WlxCapture<U, R> {
     fn cursor(&self) -> Option<frame::MouseMeta> {
         None
     }
+    /// The cursor's current picture, when the source sends one (it changes with the pointer
+    /// shape). The same `Arc` is returned until it changes.
+    fn cursor_image(&self) -> Option<std::sync::Arc<frame::CursorImage>> {
+        None
+    }
 }

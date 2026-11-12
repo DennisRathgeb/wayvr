@@ -19,6 +19,13 @@ pub mod frag_grid {
     }
 }
 
+pub mod frag_cursor {
+    vulkano_shaders::shader! {
+        ty: "fragment",
+        path: "src/shaders/cursor.frag",
+    }
+}
+
 pub mod frag_screen {
     vulkano_shaders::shader! {
         ty: "fragment",

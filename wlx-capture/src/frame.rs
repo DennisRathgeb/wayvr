@@ -131,6 +131,18 @@ pub struct MemPtrFrame {
     pub mouse: Option<MouseMeta>,
 }
 
+/// The desktop cursor's picture, as the compositor sends it with the cursor metadata.
+#[derive(Clone, PartialEq)]
+pub struct CursorImage {
+    pub width: u32,
+    pub height: u32,
+    /// RGBA, 8 bit, alpha not premultiplied, `width * height * 4` bytes
+    pub rgba: Vec<u8>,
+    /// Size and hotspot as fractions of the captured picture's width and height
+    pub size: [f32; 2],
+    pub hotspot: [f32; 2],
+}
+
 #[derive(Default, Clone, PartialEq)]
 pub struct MouseMeta {
     pub x: f32,

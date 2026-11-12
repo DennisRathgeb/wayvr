@@ -26,7 +26,7 @@ use wgui::{
 };
 use wlx_capture::{
     DrmFormat, DrmFourcc, DrmModifier, WlxCapture,
-    frame::{self as wlx_frame, DmaExporter, FrameFormat, MouseMeta, WlxFrame},
+    frame::{self as wlx_frame, CursorImage, DmaExporter, FrameFormat, MouseMeta, WlxFrame},
 };
 use wlx_common::{config::GeneralConfig, overlays::StereoMode};
 
@@ -57,6 +57,10 @@ pub struct ScreenPipeline {
     transform: wlx_frame::Transform,
     stereo: StereoMode,
     stereo_adjust_mouse: bool,
+    /// Draws the cursor with its alpha, over the screen
+    cursor_pipeline: Arc<WGfxPipeline<Vert2Uv>>,
+    /// The desktop cursor's picture; a small square is drawn until one arrives
+    cursor_image: Option<Arc<CursorImage>>,
 }
 
 impl ScreenPipeline {
@@ -77,9 +81,19 @@ impl ScreenPipeline {
                 .use_updatable_descriptors(smallvec![0]),
         )?;
 
+        let cursor_pipeline = app.gfx.create_pipeline(
+            app.gfx_extras.shaders.get("vert_quad").unwrap(), // want panic
+            app.gfx_extras.shaders.get("frag_cursor").unwrap(), // want panic
+            WPipelineCreateInfo::new(app.gfx.surface_format)
+                .use_blend(AttachmentBlend::alpha())
+                .use_updatable_descriptors(smallvec![0]),
+        )?;
+
         let mut me = Self {
             pass: smallvec![Self::create_pass(app, pipeline.clone(), extentf, offsetf,)?],
-            mouse: Self::create_mouse_pass(app, pipeline.clone(), extentf, offsetf)?,
+            mouse: Self::create_mouse_pass(app, cursor_pipeline.clone(), extentf, offsetf, None)?,
+            cursor_pipeline,
+            cursor_image: None,
             pipeline,
             extentf,
             offsetf,
@@ -141,7 +155,37 @@ impl ScreenPipeline {
         self.transform = transform;
         self.pass.clear();
 
-        self.mouse = Self::create_mouse_pass(app, self.pipeline.clone(), extentf, offsetf)?;
+        self.mouse = Self::create_mouse_pass(
+            app,
+            self.cursor_pipeline.clone(),
+            extentf,
+            offsetf,
+            self.cursor_image.as_deref(),
+        )?;
+        Ok(())
+    }
+
+    /// Use the desktop cursor's picture from now on (called when it changes).
+    pub fn set_cursor_image(
+        &mut self,
+        app: &mut AppState,
+        image: Arc<CursorImage>,
+    ) -> anyhow::Result<()> {
+        if self
+            .cursor_image
+            .as_ref()
+            .is_some_and(|cur| Arc::ptr_eq(cur, &image))
+        {
+            return Ok(());
+        }
+        self.mouse = Self::create_mouse_pass(
+            app,
+            self.cursor_pipeline.clone(),
+            self.extentf,
+            self.offsetf,
+            Some(&image),
+        )?;
+        self.cursor_image = Some(image);
         Ok(())
     }
 
@@ -178,6 +222,7 @@ impl ScreenPipeline {
         pipeline: Arc<WGfxPipeline<Vert2Uv>>,
         extentf: [f32; 2],
         offsetf: [f32; 2],
+        cursor: Option<&CursorImage>,
     ) -> anyhow::Result<BufPass> {
         #[rustfmt::skip]
         let mouse_bytes = [
@@ -191,8 +236,17 @@ impl ScreenPipeline {
             .gfx
             .create_xfer_command_buffer(CommandBufferUsage::OneTimeSubmit)?;
 
-        let image =
-            cmd_xfer.upload_image(4, 4, vulkano::format::Format::R8G8B8A8_UNORM, &mouse_bytes)?;
+        let image = match cursor {
+            Some(c) => cmd_xfer.upload_image(
+                c.width,
+                c.height,
+                vulkano::format::Format::R8G8B8A8_UNORM,
+                &c.rgba,
+            )?,
+            None => {
+                cmd_xfer.upload_image(4, 4, vulkano::format::Format::R8G8B8A8_UNORM, &mouse_bytes)?
+            }
+        };
 
         let view = ImageView::new_default(image)?;
 
@@ -200,7 +254,12 @@ impl ScreenPipeline {
             .graphics
             .empty_buffer(BufferUsage::TRANSFER_DST | BufferUsage::VERTEX_BUFFER, 4)?;
 
-        let set0 = pipeline.uniform_sampler(0, view, Filter::Nearest)?;
+        let filter = if cursor.is_some() {
+            Filter::Linear
+        } else {
+            Filter::Nearest
+        };
+        let set0 = pipeline.uniform_sampler(0, view, filter)?;
         let pass = pipeline.create_pass(
             extentf,
             offsetf,
@@ -269,15 +328,28 @@ impl ScreenPipeline {
                 (1.0, 1.0)
             };
 
-            upload_quad_vertices(
-                &mut self.mouse.buf_vert,
-                self.extentf[0],
-                self.extentf[1],
-                mouse.x.mul_add(self.extentf[0] * x_scale, -half_size),
-                mouse.y.mul_add(self.extentf[1] * y_scale, -half_size),
-                size,
-                size,
-            )?;
+            if let Some(c) = self.cursor_image.as_ref() {
+                // the desktop cursor's own picture, hotspot on the position
+                upload_quad_vertices(
+                    &mut self.mouse.buf_vert,
+                    self.extentf[0],
+                    self.extentf[1],
+                    (mouse.x - c.hotspot[0]) * self.extentf[0] * x_scale,
+                    (mouse.y - c.hotspot[1]) * self.extentf[1] * y_scale,
+                    c.size[0] * self.extentf[0] * x_scale,
+                    c.size[1] * self.extentf[1] * y_scale,
+                )?;
+            } else {
+                upload_quad_vertices(
+                    &mut self.mouse.buf_vert,
+                    self.extentf[0],
+                    self.extentf[1],
+                    mouse.x.mul_add(self.extentf[0] * x_scale, -half_size),
+                    mouse.y.mul_add(self.extentf[1] * y_scale, -half_size),
+                    size,
+                    size,
+                )?;
+            }
 
             cmd_buf.run_ref(&self.mouse.pass)?;
         }
@@ -740,6 +812,9 @@ where
     }
     fn cursor(&self) -> Option<MouseMeta> {
         self.inner.cursor()
+    }
+    fn cursor_image(&self) -> Option<Arc<CursorImage>> {
+        self.inner.cursor_image()
     }
 }
 

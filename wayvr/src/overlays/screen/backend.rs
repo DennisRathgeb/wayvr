@@ -274,10 +274,11 @@ impl OverlayBackend for ScreenBackend {
 
         // want panic; must be Some if cur_frame is also Some
         let cursor = self.capture.cursor().or_else(|| capture.mouse.clone());
-        self.pipeline
-            .as_mut()
-            .unwrap()
-            .render(image, cursor.as_ref(), app, rdr)?;
+        let pipeline = self.pipeline.as_mut().unwrap();
+        if let Some(cursor_image) = self.capture.cursor_image() {
+            pipeline.set_cursor_image(app, cursor_image)?;
+        }
+        pipeline.render(image, cursor.as_ref(), app, rdr)?;
         self.drawn_cursor = self.capture.cursor();
         self.capture.request_new_frame();
         Ok(())
