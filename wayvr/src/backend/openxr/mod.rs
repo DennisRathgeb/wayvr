@@ -46,6 +46,17 @@ mod swapchain;
 
 const VIEW_TYPE: xr::ViewConfigurationType = xr::ViewConfigurationType::PRIMARY_STEREO;
 
+/// The bones of the hand skeleton as pairs of XR_EXT_hand_tracking joint indices: the wrist to
+/// each finger's base, along each finger, and across the knuckles.
+const HAND_BONES: [(usize, usize); 27] = [
+    (1, 2), (2, 3), (3, 4), (4, 5), // thumb
+    (1, 6), (6, 7), (7, 8), (8, 9), (9, 10), // index
+    (1, 11), (11, 12), (12, 13), (13, 14), (14, 15), // middle
+    (1, 16), (16, 17), (17, 18), (18, 19), (19, 20), // ring
+    (1, 21), (21, 22), (22, 23), (23, 24), (24, 25), // little
+    (7, 12), (12, 17), (17, 22), // knuckles
+];
+
 struct XrState {
     instance: xr::Instance,
     session: xr::Session<xr::Vulkan>,
@@ -137,6 +148,23 @@ pub fn openxr_run(args: &Args, params: RunParams) -> Result<(), BackendError> {
     };
 
     let mut skybox: Option<Skybox> = None;
+
+    // hand skeletons (when the runtime tracks hands): a tracker and one line per bone, per hand
+    let mut hand_skeletons = Vec::new();
+    if xr_state.instance.exts().ext_hand_tracking.is_some() {
+        for hand in [xr::Hand::LEFT, xr::Hand::RIGHT] {
+            match xr_state.session.create_hand_tracker(hand) {
+                Ok(tracker) => {
+                    let mut ids = Vec::with_capacity(HAND_BONES.len());
+                    for _ in HAND_BONES {
+                        ids.push(lines.allocate(&xr_state, &app)?);
+                    }
+                    hand_skeletons.push((tracker, ids));
+                }
+                Err(e) => log::warn!("No hand tracker for the skeleton display: {e}"),
+            }
+        }
+    }
 
     let pointer_lines = [
         lines.allocate(&xr_state, &app)?,
@@ -349,6 +377,27 @@ pub fn openxr_run(args: &Args, params: RunParams) -> Result<(), BackendError> {
                 line.mode as usize + 1,
                 app.input_state.hmd,
             );
+        }
+
+        // The tracked hands as skeletons, so one sees what the hand tracking sees.
+        for (hand, (tracker, ids)) in hand_skeletons.iter().enumerate() {
+            let Ok(Some(joints)) = xr_state
+                .stage
+                .locate_hand_joints(tracker, xr_state.predicted_display_time)
+            else {
+                continue;
+            };
+            let valid = xr::SpaceLocationFlags::POSITION_VALID;
+            for (id, (a, b)) in ids.iter().zip(HAND_BONES) {
+                let (ja, jb) = (&joints[a], &joints[b]);
+                if !ja.location_flags.contains(valid) || !jb.location_flags.contains(valid) {
+                    continue;
+                }
+                let p = |j: &xr::HandJointLocation| {
+                    glam::Vec3A::new(j.pose.position.x, j.pose.position.y, j.pose.position.z)
+                };
+                lines.draw_between(*id, p(ja), p(jb), hand + 1, app.input_state.hmd);
+            }
         }
 
         app.hid_provider.inner.commit();

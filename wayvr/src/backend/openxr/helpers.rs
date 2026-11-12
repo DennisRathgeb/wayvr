@@ -59,6 +59,10 @@ pub(super) fn init_xr() -> Result<(xr::Instance, xr::SystemId), anyhow::Error> {
     } else {
         log::warn!("Missing EXT_hp_mixed_reality_controller extension.");
     }
+    if available_extensions.ext_hand_tracking {
+        // for the hand skeleton drawn as feedback
+        enabled_extensions.ext_hand_tracking = true;
+    }
     if available_extensions.ext_hand_interaction {
         enabled_extensions.ext_hand_interaction = true;
     } else {
