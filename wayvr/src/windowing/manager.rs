@@ -198,6 +198,16 @@ where
     pub fn handle_task(&mut self, app: &mut AppState, task: OverlayTask) -> anyhow::Result<()> {
         match task {
             OverlayTask::ShowHide => self.show_hide(app),
+            OverlayTask::ResetScreens => {
+                // the anchor goes in front of the head, as when the set is shown; screens forget
+                // where they were moved to, everything else keeps its place relative to the anchor
+                let hmd = snap_upright(app.input_state.hmd, Vec3A::Y);
+                app.anchor = hmd * self.anchor_local;
+                for o in self.overlays.values_mut() {
+                    o.config
+                        .reset(app, o.config.category == OverlayCategory::Screen);
+                }
+            }
             OverlayTask::ToggleSet(set) => {
                 self.switch_or_toggle_set(app, set);
             }

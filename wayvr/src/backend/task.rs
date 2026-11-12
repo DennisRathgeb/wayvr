@@ -124,6 +124,8 @@ pub enum OverlayTask {
     SwitchSet(Option<usize>),
     ToggleOverlay(OverlaySelector, ToggleMode),
     ResetOverlay(OverlaySelector),
+    /// All screens back to their default places, in front of the head
+    ResetScreens,
     ResizeOverlay(OverlaySelector, [u32; 2]),
     DeleteActiveSet,
     ToggleEditMode,

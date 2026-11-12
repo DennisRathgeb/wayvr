@@ -518,6 +518,8 @@ where
                 && let Some(state) = overlay.config.active_state.as_mut()
             {
                 push_pull_from_head(&mut state.transform, &hmd, push_all);
+                window::save_transform(state, app);
+                overlay.config.dirty = true;
             }
         }
     }
@@ -734,9 +736,13 @@ fn handle_scroll<O>(hit: &PointerHit, hovered: &mut OverlayWindowData<O>, app: &
 
     if pointer.mouse && app.input_state.edit_mode {
         // edit mode with the mouse: the wheel brings the panel nearer (wheel up) or pushes it away
+        let (hmd, notches) = (app.input_state.hmd, pointer.now.scroll_y);
         if let Some(state) = hovered.config.active_state.as_mut() {
-            push_pull_from_head(&mut state.transform, &app.input_state.hmd, pointer.now.scroll_y);
+            push_pull_from_head(&mut state.transform, &hmd, notches);
+            window::save_transform(state, app);
         }
+        // without this the moved panel is not handed to the compositor
+        hovered.config.dirty = true;
         return;
     }
 

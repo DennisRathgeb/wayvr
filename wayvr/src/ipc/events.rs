@@ -1,4 +1,3 @@
-use crate::windowing::OverlaySelector;
 use crate::backend::wayvr::{self, WayVRTask, WvrServerState};
 use wayvr_ipc::packet_client::{HandsfreeMode, HandsfreeParams};
 use wlx_common::config::HandsfreePointer;
@@ -55,11 +54,8 @@ where
                 app.tasks.enqueue(TaskType::Overlay(OverlayTask::ShowHide));
             }
             WayVRSignal::ResetScreens => {
-                for screen in &app.screens {
-                    app.tasks.enqueue(TaskType::Overlay(OverlayTask::ResetOverlay(
-                        OverlaySelector::Name(screen.name.clone()),
-                    )));
-                }
+                app.tasks
+                    .enqueue(TaskType::Overlay(OverlayTask::ResetScreens));
             }
             WayVRSignal::SwitchSet(set) => {
                 app.tasks

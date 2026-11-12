@@ -738,6 +738,9 @@ where
     fn supports_dmbuf(&self) -> bool {
         self.inner.supports_dmbuf()
     }
+    fn cursor(&self) -> Option<MouseMeta> {
+        self.inner.cursor()
+    }
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref, clippy::unnecessary_wraps)]
