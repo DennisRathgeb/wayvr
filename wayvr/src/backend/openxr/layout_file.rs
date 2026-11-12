@@ -131,6 +131,32 @@ fn apply_regions(
             })
             .unwrap_or(0.0008)
     };
+    // Where a region goes when it does not say: just in front of its place on its screen's panel
+    // (the panel's plane at its centre; a curved screen is treated as flat here).
+    let default_pose = |r: &RegionSpec| -> Option<Vec<f32>> {
+        overlays
+            .values()
+            .filter(|o| r.screen.as_deref().is_none_or(|n| &*o.config.name == n))
+            .find_map(|o| {
+                let d = o.config.backend.desktop_rect()?;
+                let state = o.config.active_state.as_ref()?;
+                if d[2] <= 0.0 || d[3] <= 0.0 {
+                    return None;
+                }
+                let t = state.transform;
+                let width = t.matrix3.col(0).length();
+                let (_, rotation, _) = Mat4::from(t).to_scale_rotation_translation();
+                let u = (r.rect[0] + r.rect[2] / 2.0 - d[0]) / d[2] - 0.5;
+                let v = 0.5 - (r.rect[1] + r.rect[3] / 2.0 - d[1]) / d[3];
+                let local = glam::Vec3::new(u * width, v * width * d[3] / d[2], 0.08);
+                let pos = glam::Vec3::from(t.translation) + rotation * local;
+                Some(
+                    Mat4::from_rotation_translation(rotation, pos)
+                        .to_cols_array()
+                        .to_vec(),
+                )
+            })
+    };
     REGIONS.with_borrow_mut(|known| {
         known.retain(|id, _| {
             let keep = list.regions.iter().any(|r| &r.id == id);
@@ -141,8 +167,12 @@ fn apply_regions(
             }
             keep
         });
-        for r in list.regions {
+        for mut r in list.regions {
             let width_m = r.rect[2] * density(r.screen.as_deref());
+            let is_new = !known.contains_key(&r.id);
+            if is_new && r.pose.is_none() {
+                r.pose = default_pose(&r);
+            }
             let pose = r.pose.clone().filter(|p| p.len() == 16);
             if let Some((spec, applied)) = known.get_mut(&r.id) {
                 if let Ok(mut s) = spec.lock() {
