@@ -1381,8 +1381,8 @@ pub struct PinchGrab {
     pub last_seen: Instant,
 }
 
-const PINCH_CLOSE_M: f32 = 0.025;
-const PINCH_OPEN_M: f32 = 0.045;
+const PINCH_CLOSE_M: f32 = 0.035; // the tracked finger tips stay ~2 cm apart in a real pinch
+const PINCH_OPEN_M: f32 = 0.055;
 const PINCH_CONFIRM_FRAMES: u32 = 3;
 const PINCH_RELEASE_FRAMES: u32 = 4;
 const PINCH_LOST_GRACE: Duration = Duration::from_millis(400);
