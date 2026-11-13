@@ -531,20 +531,28 @@ where
 
     // Meta+Alt held: after a moment (so a quick shortcut does not nudge anything) the anchor is
     // fixed to the head, and every anchored panel follows it, keeping its place in the group.
+    // Panels placed freely in the room (the page regions shown as panels of their own) make the
+    // same move, so the whole arrangement is carried as one rigid group.
     if let Some((since, rel)) = app.input_state.carry.as_mut()
         && since.elapsed() > Duration::from_millis(250)
     {
         let hmd = app.input_state.hmd;
         let rel = *rel.get_or_insert_with(|| hmd.inverse() * app.anchor);
+        let before = app.anchor;
         app.anchor = hmd * rel;
+        let moved = app.anchor * before.inverse();
         for overlay in overlays.values_mut() {
-            if overlay
-                .config
-                .active_state
-                .as_ref()
-                .is_some_and(|s| matches!(s.positioning, Positioning::Anchored))
-            {
-                overlay.config.reset(app, false);
+            let Some(state) = overlay.config.active_state.as_mut() else {
+                continue;
+            };
+            match state.positioning {
+                Positioning::Anchored => overlay.config.reset(app, false),
+                Positioning::Floating if state.grabbable => {
+                    state.transform = moved * state.transform;
+                    window::save_transform(state, app);
+                    overlay.config.dirty = true;
+                }
+                _ => {}
             }
         }
     }
