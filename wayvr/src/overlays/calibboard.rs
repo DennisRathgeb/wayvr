@@ -3,10 +3,12 @@
 //! drawn board covers the real one from several places.
 //!
 //! The pose comes from `$XDG_RUNTIME_DIR/xr-calib-board.json`, written by `calib/board_publisher.py`:
-//! `{"position": [x, y, z], "orientation": [x, y, z, w], "width": 0.75, "height": 0.525,
-//! "squares": [10, 7], "margin": 0.03}` in the stage space, the panel's centre and its facing
-//! (the panel's -Z looks at the wearer). The file is read again whenever it changes; the board is
-//! shown while the file is younger than two seconds.
+//! `{"frame": "head" | "stage", "position": [x, y, z], "orientation": [x, y, z, w], "width": 0.75,
+//! "height": 0.525, "squares": [10, 7], "margin": 0.03}`: the panel's centre and its facing (the
+//! panel's -Z looks at the wearer). With frame "head" the pose is relative to the head and the
+//! panel is placed from the current head pose every frame, so it depends only on the camera's
+//! latest detection and the camera-to-head calibration, not on the 6DoF world pose. The file is
+//! read again whenever it changes; the board is shown while the file is younger than two seconds.
 use std::{path::PathBuf, sync::Arc, time::SystemTime};
 
 use glam::{Affine2, Affine3A, Quat, Vec3};
@@ -41,6 +43,7 @@ pub fn pose_file() -> PathBuf {
 
 #[derive(Default, Clone, Copy)]
 struct BoardPose {
+    head_frame: bool,
     position: Vec3,
     orientation: Quat,
     width: f32,
@@ -63,6 +66,7 @@ fn read_pose(path: &PathBuf) -> Option<BoardPose> {
     let q = arr("orientation", 4)?;
     let s = arr("squares", 2).unwrap_or_else(|| vec![10.0, 7.0]);
     Some(BoardPose {
+        head_frame: v.get("frame").and_then(|x| x.as_str()) == Some("head"),
         position: Vec3::new(p[0], p[1], p[2]),
         orientation: Quat::from_xyzw(q[0], q[1], q[2], q[3]).normalize(),
         width: v.get("width").and_then(|x| x.as_f64()).unwrap_or(0.75) as f32,
@@ -137,7 +141,7 @@ impl CalibBoardBackend {
     }
 }
 
-static POLL: std::sync::Mutex<Option<(Option<SystemTime>, std::time::Instant, bool)>> = std::sync::Mutex::new(None);
+static POLL: std::sync::Mutex<Option<(Option<SystemTime>, std::time::Instant, bool, Option<BoardPose>)>> = std::sync::Mutex::new(None);
 
 /// Called from the frame loop: places or hides the board overlay as the pose file changes
 /// (looked at five times a second).
@@ -146,46 +150,45 @@ where
     T: Default,
 {
     let path = pose_file();
-    let change: Option<Option<BoardPose>> = {
+    // (pose to place, hide) : pose is Some while shown; hide is true once when the file went stale
+    let (pose, hide): (Option<BoardPose>, bool) = {
         let mut guard = POLL.lock().unwrap();
-        let (last_mtime, last_check, shown) = guard.get_or_insert((None, std::time::Instant::now() - std::time::Duration::from_secs(1), false));
-        if last_check.elapsed().as_millis() < 200 {
-            None
-        } else {
+        let (last_mtime, last_check, shown, last_pose) =
+            guard.get_or_insert((None, std::time::Instant::now() - std::time::Duration::from_secs(1), false, None));
+        if last_check.elapsed().as_millis() >= 200 {
             *last_check = std::time::Instant::now();
             let mtime = std::fs::metadata(&path).ok().and_then(|m| m.modified().ok());
             let fresh = mtime.and_then(|t| t.elapsed().ok()).is_some_and(|age| age.as_secs_f32() < 2.0);
             if !fresh {
-                if *shown {
-                    *shown = false;
-                    *last_mtime = None;
-                    Some(None)
-                } else {
-                    None
-                }
-            } else if mtime == *last_mtime {
-                None
+                let was = *shown;
+                *shown = false;
+                *last_mtime = None;
+                *last_pose = None;
+                (None, was)
             } else {
-                *last_mtime = mtime;
-                match read_pose(&path) {
-                    Some(p) => {
+                if mtime != *last_mtime {
+                    *last_mtime = mtime;
+                    if let Some(p) = read_pose(&path) {
+                        *last_pose = Some(p);
                         *shown = true;
-                        Some(Some(p))
                     }
-                    None => None,
                 }
+                (*last_pose, false)
             }
+        } else {
+            (*last_pose, false)
         }
     };
-    let Some(change) = change else {
+    if pose.is_none() && !hide {
         return;
-    };
+    }
     let Some((_, overlay)) = overlays.iter_mut().find(|(_, o)| &*o.config.name == CALIB_BOARD_NAME) else {
         return;
     };
-    match change {
+    match pose {
         Some(p) => {
-            let transform = Affine3A::from_scale_rotation_translation(Vec3::splat(p.width), p.orientation, p.position);
+            let local = Affine3A::from_scale_rotation_translation(Vec3::splat(p.width), p.orientation, p.position);
+            let transform = if p.head_frame { app.input_state.hmd * local } else { local };
             overlay.config.default_state.transform = transform;
             if overlay.config.active_state.is_none() {
                 overlay.config.activate(app, false);
@@ -196,7 +199,11 @@ where
             }
             overlay.config.dirty = true;
         }
-        None => overlay.config.deactivate(),
+        None => {
+            if hide {
+                overlay.config.deactivate();
+            }
+        }
     }
 }
 
