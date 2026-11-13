@@ -559,6 +559,7 @@ where
         let scale = app.anchor.matrix3.x_axis.length();
         let new_scale = (scale * 1.08f32.powf(scale_all)).clamp(0.3, 4.0);
         app.anchor.matrix3 = app.anchor.matrix3.mul_scalar(new_scale / scale);
+        let mut moved_about_head: Option<Affine3A> = None;
         if push_all.abs() > 0.1 {
             let head = hmd.translation;
             // The step is limited so that the nearest screen stays beyond 0.3 m, the farthest
@@ -569,7 +570,9 @@ where
                 let Some(state) = overlay.config.active_state.as_ref() else {
                     continue;
                 };
-                if !matches!(state.positioning, Positioning::Anchored) {
+                // anchored screens and panels placed freely in the room (floating: the page
+                // regions shown as panels of their own) move together
+                if !matches!(state.positioning, Positioning::Anchored | Positioning::Floating) {
                     continue;
                 }
                 let d = (state.transform.translation - head).length();
@@ -589,6 +592,7 @@ where
                     glam::Vec3::from((1.0 - k) * head),
                 );
                 app.anchor = about_head * app.anchor;
+                moved_about_head = Some(about_head);
             }
         }
         if let Some((_, Some(rel))) = app.input_state.carry.as_mut() {
@@ -602,6 +606,15 @@ where
                 .is_some_and(|s| matches!(s.positioning, Positioning::Anchored))
             {
                 overlay.config.reset(app, false);
+            } else if let Some(about_head) = moved_about_head
+                && let Some(state) = overlay.config.active_state.as_mut()
+                && matches!(state.positioning, Positioning::Floating)
+                && state.grabbable
+            {
+                // floating panels keep their place in the arrangement: same step about the head
+                state.transform = about_head * state.transform;
+                window::save_transform(state, app);
+                overlay.config.dirty = true;
             }
         }
     }
