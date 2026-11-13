@@ -1371,13 +1371,24 @@ fn raycast_cylinder(
 pub struct PinchGrab {
     pub id: OverlayID,
     pub panel_in_sight: Vec3A,
+    /// Distance of the pinch point from the head when the grab started: the panel's distance
+    /// scales with the hand's (hand 20 % farther, panel 20 % farther).
+    pub hand_dist: f32,
+    /// The smoothed scale factor of the moment.
+    pub depth_factor: f32,
+    /// Frames in a row with the pinch read as open: the drop waits for a few, finger tips jitter.
+    pub open_frames: u32,
     pub last_seen: Instant,
 }
 
 const PINCH_CLOSE_M: f32 = 0.025;
 const PINCH_OPEN_M: f32 = 0.045;
 const PINCH_CONFIRM_FRAMES: u32 = 3;
+const PINCH_RELEASE_FRAMES: u32 = 4;
 const PINCH_LOST_GRACE: Duration = Duration::from_millis(400);
+const PINCH_DEPTH_SMOOTHING: f32 = 0.25; // per frame, against the tracker's depth jitter
+const PANEL_DIST_MIN: f32 = 0.3;
+const PANEL_DIST_MAX: f32 = 6.0;
 
 /// A frame at the head whose -Z is the line of sight to `target`, upright by the head's up.
 fn sight_frame(hmd: &Affine3A, target: Vec3A) -> Option<Affine3A> {
@@ -1456,28 +1467,44 @@ pub fn hand_pinch_grab<O>(
         None => (None, f32::INFINITY),
     };
 
-    if let Some(grab) = app.input_state.pinch_grabs[hand].take() {
+    if let Some(mut grab) = app.input_state.pinch_grabs[hand].take() {
         let Some(overlay) = overlays.mut_by_id(grab.id) else {
             return; // the panel is gone
         };
+        if gap < PINCH_OPEN_M {
+            grab.open_frames = 0;
+        } else if point.is_some() {
+            grab.open_frames += 1;
+        }
         let (keep, seen) = match point {
             None => (now - grab.last_seen < PINCH_LOST_GRACE, false), // lost for a moment: hold on
-            Some(p) if gap < PINCH_OPEN_M => {
+            Some(_) if grab.open_frames >= PINCH_RELEASE_FRAMES => (false, false),
+            Some(p) => {
                 if let (Some(sight), Some(state)) = (sight_frame(&hmd, p), overlay.config.active_state.as_mut()) {
-                    state.transform.translation = sight.transform_point3a(grab.panel_in_sight);
+                    // depth: the hand's distance from the head, relative to the grab, moves the
+                    // panel along the line of sight by the same ratio
+                    let hand_dist = (p - hmd.translation).length();
+                    let wanted = (hand_dist / grab.hand_dist).clamp(0.25, 4.0);
+                    grab.depth_factor += (wanted - grab.depth_factor) * PINCH_DEPTH_SMOOTHING;
+                    let panel_dist = grab.panel_in_sight.length();
+                    let factor = if panel_dist > 1e-3 {
+                        (grab.depth_factor * panel_dist).clamp(PANEL_DIST_MIN, PANEL_DIST_MAX) / panel_dist
+                    } else {
+                        1.0
+                    };
+                    state.transform.translation = sight.transform_point3a(grab.panel_in_sight * factor);
                     let scale = scalar_scale(&state.transform);
                     realign_roll(&mut state.transform, &hmd, scale, app.session.config.snap_angle_deg, true);
                     overlay.config.dirty = true;
                 }
                 (true, true)
             }
-            Some(_) => (false, false),
         };
         if keep {
-            app.input_state.pinch_grabs[hand] = Some(PinchGrab {
-                last_seen: if seen { now } else { grab.last_seen },
-                ..grab
-            });
+            if seen {
+                grab.last_seen = now;
+            }
+            app.input_state.pinch_grabs[hand] = Some(grab);
         } else {
             overlay.config.pause_movement = false;
             if let Some(state) = overlay.config.active_state.as_mut() {
@@ -1516,8 +1543,16 @@ pub fn hand_pinch_grab<O>(
         return;
     };
     let panel_in_sight = sight.inverse().transform_point3a(state.transform.translation);
+    let hand_dist = (p - hmd.translation).length().max(0.05);
     overlay.config.pause_movement = true;
     app.input_state.pinch_closed[hand] = 0;
-    app.input_state.pinch_grabs[hand] = Some(PinchGrab { id, panel_in_sight, last_seen: now });
+    app.input_state.pinch_grabs[hand] = Some(PinchGrab {
+        id,
+        panel_in_sight,
+        hand_dist,
+        depth_factor: 1.0,
+        open_frames: 0,
+        last_seen: now,
+    });
     log::info!("Pinch {hand}: grabbed {}", overlay.config.name);
 }
