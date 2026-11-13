@@ -150,7 +150,9 @@ pub fn openxr_run(args: &Args, params: RunParams) -> Result<(), BackendError> {
 
     let mut skybox: Option<Skybox> = None;
 
-    // hand skeletons (when the runtime tracks hands): a tracker and one line per bone, per hand
+    // hand skeletons (when the runtime tracks hands): a tracker and one line per bone, per hand;
+    // the same joints drive the pinch grab (WAYVR_PINCH_GRAB=0 turns that off)
+    let pinch_grab_enabled = std::env::var("WAYVR_PINCH_GRAB").map_or(true, |v| v != "0");
     let mut hand_skeletons = Vec::new();
     if xr_state.instance.exts().ext_hand_tracking.is_some() {
         for hand in [xr::Hand::LEFT, xr::Hand::RIGHT] {
@@ -385,31 +387,39 @@ pub fn openxr_run(args: &Args, params: RunParams) -> Result<(), BackendError> {
             );
         }
 
-        // The tracked hands as skeletons, so one sees what the hand tracking sees.
+        // The tracked hands as skeletons, so one sees what the hand tracking sees, and the
+        // pinch grab: a pinch over a panel takes the panel along.
         for (hand, (tracker, ids)) in hand_skeletons.iter().enumerate() {
-            let Ok(Some(joints)) = xr_state
+            let mut pinch = None;
+            if let Ok(Some(joints)) = xr_state
                 .stage
                 .locate_hand_joints(tracker, xr_state.predicted_display_time)
-            else {
-                continue;
-            };
-            let valid = xr::SpaceLocationFlags::POSITION_VALID;
-            for (id, (a, b)) in ids.iter().zip(HAND_BONES) {
-                let (ja, jb) = (&joints[a], &joints[b]);
-                if !ja.location_flags.contains(valid) || !jb.location_flags.contains(valid) {
-                    continue;
-                }
+            {
+                let valid = xr::SpaceLocationFlags::POSITION_VALID;
                 let p = |j: &xr::HandJointLocation| {
                     glam::Vec3A::new(j.pose.position.x, j.pose.position.y, j.pose.position.z)
                 };
-                lines.draw_between_width(
-                    *id,
-                    p(ja),
-                    p(jb),
-                    lines::HAND_COLOR + hand,
-                    app.input_state.hmd,
-                    lines::HAND_LINE_WIDTH,
-                );
+                // XR_HAND_JOINT_THUMB_TIP_EXT = 5, XR_HAND_JOINT_INDEX_TIP_EXT = 10
+                if joints[5].location_flags.contains(valid) && joints[10].location_flags.contains(valid) {
+                    pinch = Some((p(&joints[5]), p(&joints[10])));
+                }
+                for (id, (a, b)) in ids.iter().zip(HAND_BONES) {
+                    let (ja, jb) = (&joints[a], &joints[b]);
+                    if !ja.location_flags.contains(valid) || !jb.location_flags.contains(valid) {
+                        continue;
+                    }
+                    lines.draw_between_width(
+                        *id,
+                        p(ja),
+                        p(jb),
+                        lines::HAND_COLOR + hand,
+                        app.input_state.hmd,
+                        lines::HAND_LINE_WIDTH,
+                    );
+                }
+            }
+            if pinch_grab_enabled {
+                crate::backend::input::hand_pinch_grab(&mut overlays, &mut app, hand, pinch);
             }
         }
 

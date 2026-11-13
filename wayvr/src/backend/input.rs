@@ -116,6 +116,10 @@ pub struct InputState {
     /// While Meta+Alt is held: since when, and (once it has started) the anchor relative to the
     /// head. All anchored panels are carried with the head as one rigid group.
     pub carry: Option<(Instant, Option<Affine3A>)>,
+    /// Panels held by a pinch, per hand (hand_pinch_grab).
+    pub pinch_grabs: [Option<PinchGrab>; 2],
+    /// Frames in a row with the pinch closed, per hand, while nothing is held.
+    pub pinch_closed: [u32; 2],
     /// Mirrored from the overlay manager every frame, so input routing can see it.
     pub edit_mode: bool,
     pub picking_focus: FocusPickState,
@@ -135,6 +139,8 @@ impl InputState {
             handsfree_state: PointerState::default(),
             mouse_ray: MouseRay::default(),
             carry: None,
+            pinch_grabs: [None, None],
+            pinch_closed: [0, 0],
             edit_mode: false,
             picking_focus: FocusPickState::None,
             disable_lerp_until: Instant::now(),
@@ -1354,4 +1360,164 @@ fn raycast_cylinder(
     hit_local.y /= size;
 
     Some((t, hit_local.xy()))
+}
+
+/*
+ * Pinch grab: a pinch over a panel takes the panel along (Dennis, 2026-11-13).
+ */
+
+/// A panel held by a pinch: where its centre sits in the frame of the line of sight through the
+/// pinch point, so it follows the hand along that line at its distance.
+pub struct PinchGrab {
+    pub id: OverlayID,
+    pub panel_in_sight: Vec3A,
+    pub last_seen: Instant,
+}
+
+const PINCH_CLOSE_M: f32 = 0.025;
+const PINCH_OPEN_M: f32 = 0.045;
+const PINCH_CONFIRM_FRAMES: u32 = 3;
+const PINCH_LOST_GRACE: Duration = Duration::from_millis(400);
+
+/// A frame at the head whose -Z is the line of sight to `target`, upright by the head's up.
+fn sight_frame(hmd: &Affine3A, target: Vec3A) -> Option<Affine3A> {
+    let fwd = target - hmd.translation;
+    let len = fwd.length();
+    if len < 0.05 || !len.is_finite() {
+        return None;
+    }
+    let fwd = fwd / len;
+    let mut up = hmd.y_axis.normalize();
+    if up.cross(fwd).length() < 1e-3 {
+        up = Vec3A::Y;
+    }
+    let right = fwd.cross(up).normalize();
+    let up = right.cross(fwd).normalize();
+    Some(Affine3A::from_cols(right, up, -fwd, hmd.translation))
+}
+
+/// The nearest panel on the line of sight (the hit inside the panel's picture).
+fn overlay_under_sight<O>(overlays: &mut OverlayWindowManager<O>, sight: &Affine3A) -> Option<OverlayID>
+where
+    O: Default,
+{
+    let edit_mode = overlays.get_edit_mode();
+    let mut hits: SmallVec<[RayHit; 8]> = smallvec!();
+    for (id, overlay) in overlays.iter() {
+        let Some(state) = overlay.config.active_state.as_ref() else {
+            continue;
+        };
+        if (!state.interactable && !edit_mode) || overlay.config.ghost {
+            continue;
+        }
+        if let Some(hit) = ray_test(sight, id, &state.transform, state.curvature.as_ref())
+            && hit.dist.is_finite()
+        {
+            hits.push(hit);
+        }
+    }
+    hits.sort_by(|a, b| a.dist.total_cmp(&b.dist));
+    for hit in hits {
+        let Some(overlay) = overlays.mut_by_id(hit.overlay) else {
+            continue;
+        };
+        let Some(uv) = overlay
+            .config
+            .backend
+            .as_mut()
+            .get_interaction_transform()
+            .map(|a| a.transform_point2(hit.local_pos))
+        else {
+            continue;
+        };
+        if (0.0..=1.0).contains(&uv.x) && (0.0..=1.0).contains(&uv.y) {
+            return Some(hit.overlay);
+        }
+    }
+    None
+}
+
+/// A pinch (thumb tip to index tip) over a panel, as seen from the head, grabs the panel. While
+/// it is held the panel follows the hand along the line of sight at its distance and faces the
+/// head, rolling with the head (as a mouse drag does); letting go leaves it there and saves the
+/// place. `pinch` is the pair of tips in stage space while the hand is tracked.
+pub fn hand_pinch_grab<O>(
+    overlays: &mut OverlayWindowManager<O>,
+    app: &mut AppState,
+    hand: usize,
+    pinch: Option<(Vec3A, Vec3A)>,
+) where
+    O: Default,
+{
+    let now = Instant::now();
+    let hmd = app.input_state.hmd;
+    let (point, gap) = match pinch {
+        Some((thumb, index)) => (Some((thumb + index) * 0.5), (thumb - index).length()),
+        None => (None, f32::INFINITY),
+    };
+
+    if let Some(grab) = app.input_state.pinch_grabs[hand].take() {
+        let Some(overlay) = overlays.mut_by_id(grab.id) else {
+            return; // the panel is gone
+        };
+        let (keep, seen) = match point {
+            None => (now - grab.last_seen < PINCH_LOST_GRACE, false), // lost for a moment: hold on
+            Some(p) if gap < PINCH_OPEN_M => {
+                if let (Some(sight), Some(state)) = (sight_frame(&hmd, p), overlay.config.active_state.as_mut()) {
+                    state.transform.translation = sight.transform_point3a(grab.panel_in_sight);
+                    let scale = scalar_scale(&state.transform);
+                    realign_roll(&mut state.transform, &hmd, scale, app.session.config.snap_angle_deg, true);
+                    overlay.config.dirty = true;
+                }
+                (true, true)
+            }
+            Some(_) => (false, false),
+        };
+        if keep {
+            app.input_state.pinch_grabs[hand] = Some(PinchGrab {
+                last_seen: if seen { now } else { grab.last_seen },
+                ..grab
+            });
+        } else {
+            overlay.config.pause_movement = false;
+            if let Some(state) = overlay.config.active_state.as_mut() {
+                window::save_transform(state, app);
+            }
+            overlay.config.dirty = true;
+            log::info!("Pinch {hand}: dropped {}", overlay.config.name);
+        }
+        return;
+    }
+
+    // Nothing held: a pinch closed for a few frames over a panel starts a grab.
+    let Some(p) = point else {
+        app.input_state.pinch_closed[hand] = 0;
+        return;
+    };
+    if gap < PINCH_CLOSE_M {
+        app.input_state.pinch_closed[hand] += 1;
+    } else {
+        app.input_state.pinch_closed[hand] = 0;
+        return;
+    }
+    if app.input_state.pinch_closed[hand] < PINCH_CONFIRM_FRAMES {
+        return;
+    }
+    let Some(sight) = sight_frame(&hmd, p) else {
+        return;
+    };
+    let Some(id) = overlay_under_sight(overlays, &sight) else {
+        return;
+    };
+    let Some(overlay) = overlays.mut_by_id(id) else {
+        return;
+    };
+    let Some(state) = overlay.config.active_state.as_ref() else {
+        return;
+    };
+    let panel_in_sight = sight.inverse().transform_point3a(state.transform.translation);
+    overlay.config.pause_movement = true;
+    app.input_state.pinch_closed[hand] = 0;
+    app.input_state.pinch_grabs[hand] = Some(PinchGrab { id, panel_in_sight, last_seen: now });
+    log::info!("Pinch {hand}: grabbed {}", overlay.config.name);
 }
