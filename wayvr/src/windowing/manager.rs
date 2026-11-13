@@ -663,6 +663,20 @@ impl<T> OverlayWindowManager<T> {
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect();
 
+            // A screen the saved layout has never heard of is a new monitor, or one the system
+            // gave another connector name: show it at its default place instead of leaving it out.
+            for (id, o) in &self.overlays {
+                if matches!(o.config.category, OverlayCategory::Screen)
+                    && !app.session.config.sets.iter().any(|set| {
+                        set.overlays.contains_key(&o.config.name)
+                            || set.hidden_overlays.contains_key(&o.config.name)
+                    })
+                {
+                    log::info!("set {i}: {} is new, showing it", o.config.name);
+                    overlays.insert(id, o.config.default_state.clone());
+                }
+            }
+
             self.sets.push(OverlayWindowSet {
                 name: s.name.clone(),
                 overlays,

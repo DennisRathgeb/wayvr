@@ -39,6 +39,7 @@ impl ScreenBackend {
 pub fn create_screen_renderer_wl(
     output: &WlxOutput,
     has_wlr_screencopy: bool,
+    kwin_nodes: Option<&std::collections::HashMap<String, u32>>,
     app: &mut AppState,
 ) -> anyhow::Result<Box<dyn OverlayBackend>> {
     if matches!(
@@ -48,6 +49,27 @@ pub fn create_screen_renderer_wl(
         && let Some(mut backend) = ScreenBackend::new_wlr_screencopy(output, app)
     {
         log::info!("{}: Using ScreenCopy capture", output.name);
+        backend.logical_pos = vec2(output.logical_pos.0 as f32, output.logical_pos.1 as f32);
+        backend.logical_size = vec2(output.logical_size.0 as f32, output.logical_size.1 as f32);
+        backend.apply_mouse_transform_with_override(Transform::Undefined);
+        return Ok(Box::new(backend));
+    }
+
+    // KWin hands out the stream of exactly this output: no dialog, no wrong pick.
+    if let Some(node_id) = kwin_nodes.and_then(|n| n.get(&*output.name)) {
+        use wlx_capture::pipewire::capture::PipewireCapture;
+
+        log::info!("{}: Using the stream from KWin", output.name);
+        let capture = new_wlx_capture!(
+            app.gfx_extras.queue_capture,
+            PipewireCapture::new(output.name.clone(), *node_id)
+        );
+        let mut backend = ScreenBackend::new_raw(
+            output.name.clone(),
+            app.feats.xr_backend,
+            CaptureType::PipeWire,
+            capture,
+        );
         backend.logical_pos = vec2(output.logical_pos.0 as f32, output.logical_pos.1 as f32);
         backend.logical_size = vec2(output.logical_size.0 as f32, output.logical_size.1 as f32);
         backend.apply_mouse_transform_with_override(Transform::Undefined);
@@ -82,6 +104,13 @@ pub fn create_screens_wayland(
     let mut order = vec![];
     let has_wlr_screencopy = wl.maybe_wlr_screencopy_mgr.is_some();
 
+    // Every screen straight from KWin where it lets us; the portal with its dialog otherwise.
+    let kwin_nodes = if has_wlr_screencopy {
+        None
+    } else {
+        wlx_capture::kde_screencast::stream_outputs(true)
+    };
+
     for (id, output) in &wl.outputs {
         if app.screens.iter().any(|s| s.name == output.name) {
             continue;
@@ -95,7 +124,8 @@ pub fn create_screens_wayland(
             output.logical_pos,
         );
 
-        let backend = create_screen_renderer_wl(output, has_wlr_screencopy, app)?;
+        let backend =
+            create_screen_renderer_wl(output, has_wlr_screencopy, kwin_nodes.as_ref(), app)?;
         let window_config = create_screen_from_backend(
             output.name.clone(),
             output.transform,

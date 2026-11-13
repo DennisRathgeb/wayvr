@@ -18,6 +18,7 @@ log = { workspace = true }
 pipewire = { workspace = true, optional = true }
 slotmap.workspace = true
 wayland-client = { workspace = true, optional = true }
+wayland-protocols-plasma = { workspace = true, optional = true }
 wayland-protocols = {
   workspace = true,
   features = [
@@ -49,6 +50,7 @@ wayland = [
   "dep:smithay-client-toolkit",
   "dep:wayland-client",
   "dep:wayland-protocols",
+  "dep:wayland-protocols-plasma",
 ]
 wlr = ["wayland"]
 xshm = ["dep:rxscreen"]
