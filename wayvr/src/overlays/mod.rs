@@ -3,6 +3,7 @@ pub mod custom;
 pub mod dashboard;
 pub mod edit;
 pub mod keyboard;
+pub mod occlusion;
 pub mod passthrough;
 pub mod region;
 pub mod relief;

@@ -64,6 +64,10 @@ pub struct ScreenBackend {
     pub(super) logical_size: Vec2,
     mouse_transform_override: MouseTransform,
     just_resumed: bool,
+    /// Pose in the stage space, for the depth occlusion
+    world: glam::Affine3A,
+    /// The depth map the picture was last drawn with
+    occlusion_seq: u64,
 }
 
 impl ScreenBackend {
@@ -90,6 +94,8 @@ impl ScreenBackend {
             logical_size: Vec2::ZERO,
             mouse_transform_override: MouseTransform::Default,
             just_resumed: false,
+            world: glam::Affine3A::IDENTITY,
+            occlusion_seq: 0,
         }
     }
 
@@ -263,7 +269,11 @@ impl OverlayBackend for ScreenBackend {
 
             Ok(ShouldRender::Should)
         } else if self.cur_frame.is_some() {
-            if self.capture.cursor() != self.drawn_cursor {
+            if self.capture.cursor() != self.drawn_cursor
+                || (crate::overlays::occlusion::enabled()
+                    && crate::overlays::occlusion::depth_seq(&app.input_state.hmd)
+                        != self.occlusion_seq)
+            {
                 Ok(ShouldRender::Should)
             } else if self.just_resumed {
                 self.just_resumed = false;
@@ -303,6 +313,16 @@ impl OverlayBackend for ScreenBackend {
             pipeline.set_cursor_image(app, cursor_image)?;
         }
         pipeline.render(image, cursor.as_ref(), app, rdr)?;
+        if crate::overlays::occlusion::enabled() {
+            use crate::overlays::occlusion::{MASK_H, MASK_W, depth_seq, mask};
+            self.occlusion_seq = depth_seq(&app.input_state.hmd);
+            let aspect = self
+                .meta
+                .map_or(16. / 9., |m| m.extent[0] as f32 / m.extent[1] as f32);
+            if let Some(rgba) = mask(&self.world, aspect) {
+                pipeline.render_occlusion(app, rdr, MASK_W, MASK_H, &rgba)?;
+            }
+        }
         self.drawn_cursor = self.capture.cursor();
         self.capture.request_new_frame();
         Ok(())
@@ -318,6 +338,10 @@ impl OverlayBackend for ScreenBackend {
     }
     fn frame_meta(&mut self) -> Option<FrameMeta> {
         self.meta
+    }
+
+    fn set_world_transform(&mut self, transform: glam::Affine3A) {
+        self.world = transform;
     }
 
     fn notify(&mut self, _app: &mut AppState, _event_data: OverlayEventData) -> anyhow::Result<()> {

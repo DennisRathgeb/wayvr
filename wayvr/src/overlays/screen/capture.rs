@@ -61,6 +61,8 @@ pub struct ScreenPipeline {
     cursor_pipeline: Arc<WGfxPipeline<Vert2Uv>>,
     /// The desktop cursor's picture; a small square is drawn until one arrives
     cursor_image: Option<Arc<CursorImage>>,
+    /// Black where real things are in front of the screen (overlays/occlusion.rs)
+    occlusion: Option<BufPass>,
 }
 
 impl ScreenPipeline {
@@ -104,6 +106,7 @@ impl ScreenPipeline {
             mouse: Self::create_mouse_pass(app, cursor_pipeline.clone(), extentf, offsetf, None)?,
             cursor_pipeline,
             cursor_image: None,
+            occlusion: None,
             pipeline,
             extentf,
             offsetf,
@@ -316,6 +319,56 @@ impl ScreenPipeline {
             cmd_buf.run_ref(&current.pass)?;
         }
 
+        Ok(())
+    }
+
+    /// Draws a mask (RGBA, black with alpha where the screen is hidden) over the whole picture.
+    pub fn render_occlusion(
+        &mut self,
+        app: &mut AppState,
+        rdr: &mut RenderResources,
+        width: u32,
+        height: u32,
+        rgba: &[u8],
+    ) -> anyhow::Result<()> {
+        let mut cmd_xfer = app
+            .gfx
+            .create_xfer_command_buffer(CommandBufferUsage::OneTimeSubmit)?;
+        let image = cmd_xfer.upload_image(
+            width,
+            height,
+            vulkano::format::Format::R8G8B8A8_UNORM,
+            rgba,
+        )?;
+        let view = ImageView::new_default(image)?;
+        let mut buf_vert = cmd_xfer
+            .graphics
+            .empty_buffer(BufferUsage::TRANSFER_DST | BufferUsage::VERTEX_BUFFER, 4)?;
+        let set0 = self.cursor_pipeline.uniform_sampler(0, view, Filter::Linear)?;
+        let pass = self.cursor_pipeline.create_pass(
+            self.extentf,
+            self.offsetf,
+            buf_vert.clone(),
+            0..4,
+            0..1,
+            vec![set0],
+            &Default::default(),
+        )?;
+        cmd_xfer.build_and_execute_now()?;
+        upload_quad_vertices(
+            &mut buf_vert,
+            self.extentf[0],
+            self.extentf[1],
+            0.,
+            0.,
+            self.extentf[0],
+            self.extentf[1],
+        )?;
+        for cmd_buf in &mut rdr.cmd_bufs {
+            cmd_buf.run_ref(&pass)?;
+        }
+        // kept until the next one replaces it, the command buffers refer to it
+        self.occlusion = Some(BufPass { pass, buf_vert });
         Ok(())
     }
 
