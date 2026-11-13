@@ -11,13 +11,14 @@
 //! `WAYVR_DEPTH_CAMERA` (a JSON file, default `~/.config/xr-desk/depth-camera.json`):
 //! `{"r": [9 numbers, row-major], "t": [3]}` with `p_head = r * p_camera + t`, the camera in
 //! OpenCV axes (x right, y down, z forward), the head in OpenXR view axes. Without the file the
-//! camera sits in the head's origin looking forward.
+//! camera sits in the head's origin looking forward. The file is read again when it changes.
 
 use std::{
     collections::VecDeque,
     fs::File,
     os::unix::fs::FileExt,
     sync::{LazyLock, Mutex},
+    time::SystemTime,
 };
 
 use glam::{Affine3A, Mat3A, Vec3A};
@@ -27,6 +28,8 @@ pub const MASK_W: u32 = 192;
 pub const MASK_H: u32 = 108;
 /// Width of the soft edge as a fraction of the distance.
 const SIGMA: f32 = 0.08;
+/// How often the camera file is looked at for a change, seconds.
+const CAMERA_CHECK_S: f64 = 0.5;
 /// How long a depth map may be used after it was taken, seconds.
 const MAX_AGE: f64 = 0.5;
 const HEADER: usize = 128;
@@ -54,17 +57,26 @@ struct State {
     /// head <- left camera (OpenCV axes)
     cam_r: Mat3A,
     cam_t: Vec3A,
+    /// The camera file's modification time when it was last read, and when that was looked at.
+    cam_mtime: Option<SystemTime>,
+    cam_checked: f64,
     /// (CLOCK_MONOTONIC seconds, head pose in the stage space)
     poses: VecDeque<(f64, Affine3A)>,
 }
 
 static STATE: LazyLock<Mutex<State>> = LazyLock::new(|| {
-    let (cam_r, cam_t) = load_camera();
+    // OpenCV camera axes to OpenXR view axes, the camera in the head's origin
+    let (cam_r, cam_t) = load_camera().unwrap_or((
+        Mat3A::from_cols(Vec3A::X, Vec3A::NEG_Y, Vec3A::NEG_Z),
+        Vec3A::ZERO,
+    ));
     Mutex::new(State {
         file: None,
         depth: None,
         cam_r,
         cam_t,
+        cam_mtime: camera_mtime(),
+        cam_checked: monotonic(),
         poses: VecDeque::new(),
     })
 });
@@ -79,42 +91,52 @@ fn monotonic() -> f64 {
     ts.tv_sec as f64 + ts.tv_nsec as f64 * 1e-9
 }
 
-fn load_camera() -> (Mat3A, Vec3A) {
-    // OpenCV camera axes to OpenXR view axes
-    let default = (
-        Mat3A::from_cols(Vec3A::X, Vec3A::NEG_Y, Vec3A::NEG_Z),
-        Vec3A::ZERO,
-    );
-    let path = std::env::var("WAYVR_DEPTH_CAMERA").unwrap_or_else(|_| {
+fn camera_path() -> String {
+    std::env::var("WAYVR_DEPTH_CAMERA").unwrap_or_else(|_| {
         format!(
             "{}/.config/xr-desk/depth-camera.json",
             std::env::var("HOME").unwrap_or_default()
         )
-    });
+    })
+}
+
+fn camera_mtime() -> Option<SystemTime> {
+    std::fs::metadata(camera_path())
+        .and_then(|m| m.modified())
+        .ok()
+}
+
+/// The camera's place in the head from the file; None when it is missing or unusable.
+fn load_camera() -> Option<(Mat3A, Vec3A)> {
+    let path = camera_path();
     let Ok(text) = std::fs::read_to_string(&path) else {
-        log::warn!("depth occlusion: no {path}, camera assumed in the head's origin");
-        return default;
+        log::warn!("depth occlusion: no {path}");
+        return None;
     };
     let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else {
         log::warn!("depth occlusion: {path} is not JSON");
-        return default;
+        return None;
     };
     let nums = |k: &str| -> Vec<f32> {
         v[k].as_array()
-            .map(|a| a.iter().filter_map(|x| x.as_f64().map(|x| x as f32)).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|x| x.as_f64().map(|x| x as f32))
+                    .collect()
+            })
             .unwrap_or_default()
     };
     let (r, t) = (nums("r"), nums("t"));
     if r.len() != 9 || t.len() != 3 {
         log::warn!("depth occlusion: {path} needs r (9) and t (3)");
-        return default;
+        return None;
     }
     log::info!("depth occlusion: camera from {path}");
-    (
+    Some((
         // row-major in the file, glam wants columns
         Mat3A::from_cols_array(&[r[0], r[3], r[6], r[1], r[4], r[7], r[2], r[5], r[8]]),
         Vec3A::new(t[0], t[1], t[2]),
-    )
+    ))
 }
 
 fn f32_at(b: &[u8], o: usize) -> f32 {
@@ -125,8 +147,28 @@ fn u64_at(b: &[u8], o: usize) -> u64 {
 }
 
 impl State {
+    /// Read the camera file again when it changed (it is tuned by hand while XR runs); looked
+    /// at twice a second. A file that cannot be used leaves the camera where it was.
+    fn refresh_camera(&mut self) {
+        let now = monotonic();
+        if now - self.cam_checked < CAMERA_CHECK_S {
+            return;
+        }
+        self.cam_checked = now;
+        let mtime = camera_mtime();
+        if mtime == self.cam_mtime {
+            return;
+        }
+        self.cam_mtime = mtime;
+        if let Some((r, t)) = load_camera() {
+            self.cam_r = r;
+            self.cam_t = t;
+        }
+    }
+
     /// Take a new depth map if the tracker wrote one.
     fn refresh(&mut self) {
+        self.refresh_camera();
         if self.file.is_none() {
             self.file = File::open("/dev/shm/viture-depth").ok();
         }
