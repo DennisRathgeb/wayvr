@@ -1389,8 +1389,36 @@ pub struct PinchGrab {
     pub last_seen: Instant,
 }
 
-const PINCH_CLOSE_M: f32 = 0.035; // the tracked finger tips stay ~2 cm apart in a real pinch
-const PINCH_OPEN_M: f32 = 0.055;
+// Gap between thumb tip and index tip, metres. Measured with the tracked hands (2026-11-13,
+// 5 / 50 / 95 %): a held pinch 1.2 / 1.7 / 2.1 cm (right hand) and 1.3 / 2.2 / 3.7 cm (left),
+// a relaxed hand 3.3 / 4.1 / 6.0 cm, an open hand 9 cm and more. So a grab starts clearly under
+// the relaxed hand, and a hand that relaxes lets go.
+const PINCH_CLOSE_M: f32 = 0.030;
+const PINCH_OPEN_M: f32 = 0.040;
+
+/// The two thresholds (grab below, release above), in metres. `WAYVR_PINCH_CM="<close> <open>"`
+/// overrides the constants, in centimetres, for tuning without a rebuild.
+fn pinch_thresholds() -> (f32, f32) {
+    static THRESHOLDS: std::sync::OnceLock<(f32, f32)> = std::sync::OnceLock::new();
+    *THRESHOLDS.get_or_init(|| {
+        let from_env = std::env::var("WAYVR_PINCH_CM").ok().and_then(|v| {
+            let mut parts = v.split_whitespace().map(str::parse::<f32>);
+            match (parts.next(), parts.next()) {
+                (Some(Ok(close)), Some(Ok(open))) if close > 0.0 && open > close => {
+                    Some((close / 100.0, open / 100.0))
+                }
+                _ => None,
+            }
+        });
+        let (close, open) = from_env.unwrap_or((PINCH_CLOSE_M, PINCH_OPEN_M));
+        log::info!(
+            "Pinch grab: grab below {:.1} cm, release above {:.1} cm",
+            close * 100.0,
+            open * 100.0
+        );
+        (close, open)
+    })
+}
 const PINCH_CONFIRM_FRAMES: u32 = 3;
 const PINCH_RELEASE_FRAMES: u32 = 4;
 const PINCH_LOST_GRACE: Duration = Duration::from_millis(400);
@@ -1482,7 +1510,7 @@ pub fn hand_pinch_grab<O>(
         let Some(overlay) = overlays.mut_by_id(grab.id) else {
             return; // the panel is gone
         };
-        if gap < PINCH_OPEN_M {
+        if gap < pinch_thresholds().1 {
             grab.open_frames = 0;
         } else if point.is_some() {
             grab.open_frames += 1;
@@ -1542,7 +1570,7 @@ pub fn hand_pinch_grab<O>(
         app.input_state.pinch_closed[hand] = 0;
         return;
     };
-    if gap < PINCH_CLOSE_M {
+    if gap < pinch_thresholds().0 {
         app.input_state.pinch_closed[hand] += 1;
     } else {
         app.input_state.pinch_closed[hand] = 0;

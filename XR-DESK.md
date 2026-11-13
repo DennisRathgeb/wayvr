@@ -42,7 +42,7 @@ desktop (`wayvr/src/backend/wayvr/input_capture.rs`).
 | Addition | Where |
 |---|---|
 | **Hand skeletons**: the tracked hands (`XR_EXT_hand_tracking`) drawn as bright lines | `wayvr/src/backend/openxr/mod.rs`, `wayvr/src/backend/openxr/lines.rs` |
-| **Pinch grab**: a pinch in front of a panel takes it along; the hand's distance from the head moves it along the line of sight; the head's roll tilts it. Off with `WAYVR_PINCH_GRAB=0`. Thresholds are constants at `hand_pinch_grab` | `wayvr/src/backend/input.rs` |
+| **Pinch grab**: a pinch in front of a panel takes it along; the hand's distance from the head moves it along the line of sight; the head's roll tilts it. Off with `WAYVR_PINCH_GRAB=0`. Thresholds: 3.0 cm to grab, 4.0 cm to release, from a labelled measurement (constants at `pinch_thresholds`); `WAYVR_PINCH_CM="<grab> <release>"` overrides them | `wayvr/src/backend/input.rs` |
 
 ## For other programs
 
