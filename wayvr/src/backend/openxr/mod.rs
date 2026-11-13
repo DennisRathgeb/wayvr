@@ -402,7 +402,14 @@ pub fn openxr_run(args: &Args, params: RunParams) -> Result<(), BackendError> {
                 let p = |j: &xr::HandJointLocation| {
                     glam::Vec3A::new(j.pose.position.x, j.pose.position.y, j.pose.position.z)
                 };
-                lines.draw_between(*id, p(ja), p(jb), hand + 1, app.input_state.hmd);
+                lines.draw_between_width(
+                    *id,
+                    p(ja),
+                    p(jb),
+                    lines::HAND_COLOR + hand,
+                    app.input_state.hmd,
+                    lines::HAND_LINE_WIDTH,
+                );
             }
         }
 

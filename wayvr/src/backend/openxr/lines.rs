@@ -35,15 +35,21 @@ static LINE_AUTO_INCREMENT: AtomicUsize = AtomicUsize::new(1);
 pub(super) const LINE_WIDTH: f32 = 0.002;
 
 // TODO customizable colors
-static COLORS: [[f32; 4]; 5] = {
+static COLORS: [[f32; 4]; 7] = {
     [
         [1., 1., 1., 1.],
         [0., 0.375, 0.5, 1.],
         [0.69, 0.188, 0., 1.],
         [0.375, 0., 0.5, 1.],
         [1., 0., 0., 1.],
+        [1., 0.9, 0.2, 1.], // hand skeleton, left: bright on an additive display
+        [0.2, 0.9, 1., 1.], // hand skeleton, right
     ]
 };
+/// Colour index of the first hand's skeleton (the second hand follows).
+pub(super) const HAND_COLOR: usize = 5;
+/// The skeleton's bones are drawn thicker than the pointer rays, or they vanish in daylight.
+pub(super) const HAND_LINE_WIDTH: f32 = 0.006;
 
 pub(super) struct LinePool {
     lines: IdMap<usize, LineContainer>,
@@ -104,6 +110,18 @@ impl LinePool {
         color: usize,
         hmd: Affine3A,
     ) {
+        self.draw_between_width(id, start, end, color, hmd, LINE_WIDTH);
+    }
+
+    pub(super) fn draw_between_width(
+        &mut self,
+        id: usize,
+        start: Vec3A,
+        end: Vec3A,
+        color: usize,
+        hmd: Affine3A,
+        width: f32,
+    ) {
         let dir = end - start;
         let len = dir.length();
 
@@ -155,6 +173,7 @@ impl LinePool {
             color,
             pose: posef,
             length: len,
+            width,
         });
     }
 
@@ -205,7 +224,7 @@ impl LinePool {
                     .eye_visibility(xr::EyeVisibility::BOTH)
                     .space(&xr.stage)
                     .size(xr::Extent2Df {
-                        width: LINE_WIDTH,
+                        width: inner.width,
                         height: inner.length,
                     });
 
@@ -221,6 +240,7 @@ pub(super) struct Line {
     pub(super) color: usize,
     pub(super) pose: xr::Posef,
     pub(super) length: f32,
+    pub(super) width: f32,
 }
 
 struct LineContainer {
