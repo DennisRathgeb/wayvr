@@ -323,6 +323,128 @@ pub fn realign_roll(
     transform.matrix3 = rotation.mul_scalar(scale);
 }
 
+/// Mean distance of the anchored screens from `head`; `None` without any.
+pub fn screens_distance<'a, T: 'a>(
+    overlays: impl Iterator<Item = &'a OverlayWindowData<T>>,
+    head: Vec3A,
+) -> Option<f32> {
+    let (mut sum, mut n) = (0.0, 0);
+    for o in overlays {
+        if let Some(state) = o.config.active_state.as_ref()
+            && matches!(o.config.category, OverlayCategory::Screen)
+            && matches!(state.positioning, Positioning::Anchored)
+        {
+            sum += (state.transform.translation - head).length();
+            n += 1;
+        }
+    }
+    (n > 0).then(|| sum / n as f32)
+}
+
+/// The anchored screens side by side on a circle of `radius` around `head`, each one facing
+/// it, in the direction the group is in now and in the order it has now. Every screen keeps
+/// its size: a larger radius brings the side screens in towards the middle, a smaller one
+/// fans them out, and a curved screen is bent to the circle. `None` for the radius keeps the
+/// distance the screens have. Returns the radius used.
+pub fn layout_screens_arc<'a, T: 'a>(
+    overlays: impl Iterator<Item = &'a mut OverlayWindowData<T>>,
+    anchor: &Affine3A,
+    head: Vec3A,
+    radius: Option<f32>,
+) -> Option<f32> {
+    const GAP: f32 = 1.03; // as in the default arrangement
+    const MAX_SPAN: f32 = 5.2; // rad: the group never closes into a full circle
+
+    struct Slot<'s> {
+        state: &'s mut OverlayWindowState,
+        azimuth: f32,
+        elevation: f32,
+        distance: f32,
+        width: f32,
+    }
+    let mut slots: Vec<Slot> = Vec::new();
+    for o in overlays {
+        if !matches!(o.config.category, OverlayCategory::Screen) {
+            continue;
+        }
+        let Some(state) = o.config.active_state.as_mut() else {
+            continue;
+        };
+        if !matches!(state.positioning, Positioning::Anchored) {
+            continue;
+        }
+        let d = state.transform.translation - head;
+        let distance = d.length();
+        if distance < 1e-3 {
+            continue;
+        }
+        slots.push(Slot {
+            azimuth: d.x.atan2(-d.z),
+            elevation: (d.y / distance).clamp(-1.0, 1.0).asin(),
+            distance,
+            width: state.transform.matrix3.x_axis.length(),
+            state,
+        });
+        o.config.dirty = true;
+    }
+    if slots.is_empty() {
+        return None;
+    }
+
+    // left to right, with the angles counted from the first screen so a group that straddles
+    // straight behind does not fall apart
+    let reference = slots[0].azimuth;
+    for s in &mut slots {
+        s.azimuth = (s.azimuth - reference + PI).rem_euclid(2.0 * PI) - PI;
+    }
+    slots.sort_by(|a, b| a.azimuth.total_cmp(&b.azimuth));
+    let n = slots.len();
+    let middle = (slots[0].azimuth + slots[n - 1].azimuth) / 2.0 + reference;
+    let elevation =
+        ((slots[(n - 1) / 2].elevation + slots[n / 2].elevation) / 2.0).clamp(-1.2, 1.2);
+    let total_width: f32 = slots.iter().map(|s| s.width).sum();
+
+    let wanted = radius.unwrap_or_else(|| slots.iter().map(|s| s.distance).sum::<f32>() / n as f32);
+    // on the circle the screens' centres run on: radius * cos(elevation)
+    let radius = wanted.max(total_width * GAP / MAX_SPAN / elevation.cos());
+    let ring = radius * elevation.cos();
+
+    // each screen's angle from the first one, then the group centred on `middle`
+    let mut angles = Vec::with_capacity(n);
+    let mut at = 0.0;
+    for i in 0..n {
+        if i > 0 {
+            at += (slots[i - 1].width + slots[i].width) / 2.0 * GAP / ring;
+        }
+        angles.push(at);
+    }
+    let span = at;
+
+    for (s, angle) in slots.iter_mut().zip(angles) {
+        let azimuth = middle + angle - span / 2.0;
+        let position = head
+            + radius
+                * Vec3A::new(
+                    elevation.cos() * azimuth.sin(),
+                    elevation.sin(),
+                    -elevation.cos() * azimuth.cos(),
+                );
+        // upright, the face square to the line from the head
+        let col_z = (head - position).normalize();
+        let col_x = Vec3A::Y.cross(col_z).normalize();
+        let col_y = col_z.cross(col_x);
+        let scale = scalar_scale(&s.state.transform);
+        s.state.transform =
+            Affine3A::from_cols(col_x * scale, col_y * scale, col_z * scale, position);
+        s.state.saved_transform = Some(anchor.inverse() * s.state.transform);
+        if s.state.curvature.is_some() {
+            // bent to the circle: curvature is the part of a full circle the screen covers
+            s.state.curvature = Some((s.width / (2.0 * PI * ring)).clamp(0.01, 0.5));
+        }
+    }
+    Some(radius)
+}
+
 pub fn scalar_scale(a: &Affine3A) -> f32 {
     let det = a.matrix3.determinant();
     (a.matrix3.x_axis.length() * det.signum()

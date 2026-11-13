@@ -126,7 +126,8 @@ where
         me.add(anchor, app);
 
         // the printed calibration board, drawn where the camera saw it (shown while its pose file is fresh)
-        let calib_board = OverlayWindowData::from_config(crate::overlays::calibboard::create_calib_board(app)?);
+        let calib_board =
+            OverlayWindowData::from_config(crate::overlays::calibboard::create_calib_board(app)?);
         me.add(calib_board, app);
 
         let watch = OverlayWindowData::from_config(create_watch(app)?);
@@ -221,6 +222,14 @@ where
                     o.config
                         .reset(app, o.config.category == OverlayCategory::Screen);
                 }
+                // on a circle around the head, at the radius chosen with Meta+Alt+wheel if any
+                let anchor = app.anchor;
+                super::window::layout_screens_arc(
+                    self.overlays.values_mut(),
+                    &anchor,
+                    app.input_state.hmd.translation,
+                    app.input_state.screen_radius,
+                );
             }
             OverlayTask::ToggleSet(set) => {
                 self.switch_or_toggle_set(app, set);

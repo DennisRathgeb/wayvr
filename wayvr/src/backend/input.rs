@@ -116,6 +116,9 @@ pub struct InputState {
     /// While Meta+Alt is held: since when, and (once it has started) the anchor relative to the
     /// head. All anchored panels are carried with the head as one rigid group.
     pub carry: Option<(Instant, Option<Affine3A>)>,
+    /// The radius of the circle of screens around the head, once it has been set with
+    /// Meta+Alt+wheel: a recentre lays the screens out at this radius again.
+    pub screen_radius: Option<f32>,
     /// Panels held by a pinch, per hand (hand_pinch_grab).
     pub pinch_grabs: [Option<PinchGrab>; 2],
     /// Frames in a row with the pinch closed, per hand, while nothing is held.
@@ -139,6 +142,7 @@ impl InputState {
             handsfree_state: PointerState::default(),
             mouse_ray: MouseRay::default(),
             carry: None,
+            screen_radius: None,
             pinch_grabs: [None, None],
             pinch_closed: [0, 0],
             edit_mode: false,
@@ -545,76 +549,59 @@ where
         }
     }
 
-    // Meta+Alt+wheel: the arc of screens is laid out again at a new radius around the head.
-    // Every anchored screen moves along its own line from the head, 8 % of its distance a step
-    // (positive = nearer), and grows or shrinks by the same factor, so neighbours stay side by
-    // side at their angles and keep their apparent size: only the distance changes. The head is
-    // the centre whatever the anchor's position, which keeps the circle around the wearer.
+    // Meta+Alt+wheel: the screens are laid out again on a circle of a new radius around the head,
+    // 8 % a notch (positive = nearer). Every screen keeps its size and faces the head, so on a
+    // wider circle the side screens come in towards the middle and on a tighter one they fan
+    // out: the group stays side by side around the wearer, wherever the head is now.
+    // Meta+Alt+Up / Down: the group grows or shrinks, 8 % a step, and is laid out again at the
+    // radius it has, so no gaps open or close.
     let push_all = std::mem::take(&mut app.input_state.mouse_ray.push_all);
     let scale_all = std::mem::take(&mut app.input_state.mouse_ray.scale_all);
     if push_all.abs() > 0.1 || scale_all.abs() > 0.1 {
         let hmd = app.input_state.hmd;
-        // Meta+Alt+Up / Down: the group grows or shrinks about its anchor, 8 % a step, so the
-        // screens stay side by side without gaps opening or closing
-        let scale = app.anchor.matrix3.x_axis.length();
-        let new_scale = (scale * 1.08f32.powf(scale_all)).clamp(0.3, 4.0);
-        app.anchor.matrix3 = app.anchor.matrix3.mul_scalar(new_scale / scale);
-        let mut moved_about_head: Option<Affine3A> = None;
-        if push_all.abs() > 0.1 {
-            let head = hmd.translation;
-            // The step is limited so that the nearest screen stays beyond 0.3 m, the farthest
-            // within 6 m and the group's scale between 0.3 and 4; a limit already passed only
-            // allows the way back (each bound lies on the far side of 1, so the clamp holds).
-            let (mut nearest, mut farthest) = (f32::INFINITY, 0.0f32);
-            for overlay in overlays.values() {
-                let Some(state) = overlay.config.active_state.as_ref() else {
-                    continue;
-                };
-                // anchored screens and panels placed freely in the room (floating: the page
-                // regions shown as panels of their own) move together
-                if !matches!(state.positioning, Positioning::Anchored | Positioning::Floating) {
-                    continue;
+        let head = hmd.translation;
+        let before = window::screens_distance(overlays.values(), head);
+
+        if scale_all.abs() > 0.1 {
+            let scale = app.anchor.matrix3.x_axis.length();
+            let new_scale = (scale * 1.08f32.powf(scale_all)).clamp(0.3, 4.0);
+            app.anchor.matrix3 = app.anchor.matrix3.mul_scalar(new_scale / scale);
+            if let Some((_, Some(rel))) = app.input_state.carry.as_mut() {
+                *rel = hmd.inverse() * app.anchor; // carried at the same time: keep the new size
+            }
+            for overlay in overlays.values_mut() {
+                if overlay
+                    .config
+                    .active_state
+                    .as_ref()
+                    .is_some_and(|s| matches!(s.positioning, Positioning::Anchored))
+                {
+                    overlay.config.reset(app, false);
                 }
-                let d = (state.transform.translation - head).length();
-                nearest = nearest.min(d);
-                farthest = farthest.max(d);
-            }
-            let group_scale = app.anchor.matrix3.x_axis.length();
-            let lo = (0.3 / nearest).min(1.0).max((0.3 / group_scale).min(1.0));
-            let hi = (6.0 / farthest).max(1.0).min((4.0 / group_scale).max(1.0));
-            let k = (1.0 - 0.08 * push_all).clamp(lo, hi);
-            if nearest.is_finite() && nearest > 1e-3 && k.is_finite() {
-                // x' = head + k (x - head), applied to the anchor: anchored screens are placed
-                // as anchor * saved, so their positions and sizes follow.
-                let about_head = Affine3A::from_scale_rotation_translation(
-                    glam::Vec3::splat(k),
-                    Quat::IDENTITY,
-                    glam::Vec3::from((1.0 - k) * head),
-                );
-                app.anchor = about_head * app.anchor;
-                moved_about_head = Some(about_head);
             }
         }
-        if let Some((_, Some(rel))) = app.input_state.carry.as_mut() {
-            *rel = hmd.inverse() * app.anchor; // carried at the same time: keep the new distance
-        }
-        for overlay in overlays.values_mut() {
-            if overlay
-                .config
-                .active_state
-                .as_ref()
-                .is_some_and(|s| matches!(s.positioning, Positioning::Anchored))
+
+        if let Some(before) = before {
+            let wanted = (before * (1.0 - 0.08 * push_all)).clamp(0.4, 6.0);
+            let anchor = app.anchor;
+            if let Some(radius) =
+                window::layout_screens_arc(overlays.values_mut(), &anchor, head, Some(wanted))
             {
-                overlay.config.reset(app, false);
-            } else if let Some(about_head) = moved_about_head
-                && let Some(state) = overlay.config.active_state.as_mut()
-                && matches!(state.positioning, Positioning::Floating)
-                && state.grabbable
-            {
-                // floating panels keep their place in the arrangement: same step about the head
-                state.transform = about_head * state.transform;
-                window::save_transform(state, app);
-                overlay.config.dirty = true;
+                app.input_state.screen_radius = Some(radius);
+                // panels placed freely in the room (the page regions shown as panels of their
+                // own) keep their direction and size and go to the new distance with the screens
+                let k = radius / before;
+                for overlay in overlays.values_mut() {
+                    if let Some(state) = overlay.config.active_state.as_mut()
+                        && matches!(state.positioning, Positioning::Floating)
+                        && state.grabbable
+                    {
+                        state.transform.translation =
+                            head + k * (state.transform.translation - head);
+                        window::save_transform(state, app);
+                        overlay.config.dirty = true;
+                    }
+                }
             }
         }
     }
