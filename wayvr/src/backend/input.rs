@@ -1408,7 +1408,10 @@ fn sight_frame(hmd: &Affine3A, target: Vec3A) -> Option<Affine3A> {
 }
 
 /// The nearest panel on the line of sight (the hit inside the panel's picture).
-fn overlay_under_sight<O>(overlays: &mut OverlayWindowManager<O>, sight: &Affine3A) -> Option<OverlayID>
+fn overlay_under_sight<O>(
+    overlays: &mut OverlayWindowManager<O>,
+    sight: &Affine3A,
+) -> Option<OverlayID>
 where
     O: Default,
 {
@@ -1480,7 +1483,9 @@ pub fn hand_pinch_grab<O>(
             None => (now - grab.last_seen < PINCH_LOST_GRACE, false), // lost for a moment: hold on
             Some(_) if grab.open_frames >= PINCH_RELEASE_FRAMES => (false, false),
             Some(p) => {
-                if let (Some(sight), Some(state)) = (sight_frame(&hmd, p), overlay.config.active_state.as_mut()) {
+                if let (Some(sight), Some(state)) =
+                    (sight_frame(&hmd, p), overlay.config.active_state.as_mut())
+                {
                     // depth: the hand's distance from the head, relative to the grab, moves the
                     // panel along the line of sight by the same ratio
                     let hand_dist = (p - hmd.translation).length();
@@ -1488,13 +1493,21 @@ pub fn hand_pinch_grab<O>(
                     grab.depth_factor += (wanted - grab.depth_factor) * PINCH_DEPTH_SMOOTHING;
                     let panel_dist = grab.panel_in_sight.length();
                     let factor = if panel_dist > 1e-3 {
-                        (grab.depth_factor * panel_dist).clamp(PANEL_DIST_MIN, PANEL_DIST_MAX) / panel_dist
+                        (grab.depth_factor * panel_dist).clamp(PANEL_DIST_MIN, PANEL_DIST_MAX)
+                            / panel_dist
                     } else {
                         1.0
                     };
-                    state.transform.translation = sight.transform_point3a(grab.panel_in_sight * factor);
+                    state.transform.translation =
+                        sight.transform_point3a(grab.panel_in_sight * factor);
                     let scale = scalar_scale(&state.transform);
-                    realign_roll(&mut state.transform, &hmd, scale, app.session.config.snap_angle_deg, true);
+                    realign_roll(
+                        &mut state.transform,
+                        &hmd,
+                        scale,
+                        app.session.config.snap_angle_deg,
+                        true,
+                    );
                     overlay.config.dirty = true;
                 }
                 (true, true)
@@ -1542,7 +1555,9 @@ pub fn hand_pinch_grab<O>(
     let Some(state) = overlay.config.active_state.as_ref() else {
         return;
     };
-    let panel_in_sight = sight.inverse().transform_point3a(state.transform.translation);
+    let panel_in_sight = sight
+        .inverse()
+        .transform_point3a(state.transform.translation);
     let hand_dist = (p - hmd.translation).length().max(0.05);
     overlay.config.pause_movement = true;
     app.input_state.pinch_closed[hand] = 0;
