@@ -122,7 +122,7 @@ pub struct InputState {
     /// Panels held by a pinch, per hand (hand_pinch_grab).
     pub pinch_grabs: [Option<PinchGrab>; 2],
     /// Frames in a row with the pinch closed, per hand, while nothing is held.
-    pub pinch_closed: [u32; 2],
+    pub pinch_closed: [Option<Instant>; 2],
     /// Mirrored from the overlay manager every frame, so input routing can see it.
     pub edit_mode: bool,
     pub picking_focus: FocusPickState,
@@ -144,7 +144,7 @@ impl InputState {
             carry: None,
             screen_radius: None,
             pinch_grabs: [None, None],
-            pinch_closed: [0, 0],
+            pinch_closed: [None, None],
             edit_mode: false,
             picking_focus: FocusPickState::None,
             disable_lerp_until: Instant::now(),
@@ -1384,9 +1384,13 @@ pub struct PinchGrab {
     pub hand_dist: f32,
     /// The smoothed scale factor of the moment.
     pub depth_factor: f32,
-    /// Frames in a row with the pinch read as open: the drop waits for a few, finger tips jitter.
-    pub open_frames: u32,
+    /// Since when the pinch has read as open without a break: the drop waits for
+    /// `PINCH_RELEASE`, because single hand samples jump.
+    pub open_since: Option<Instant>,
+    /// The widest gap seen in the current open stretch, for the log.
+    pub open_gap: f32,
     pub last_seen: Instant,
+    pub started: Instant,
 }
 
 // Gap between thumb tip and index tip, metres. Measured with the tracked hands (2026-11-13,
@@ -1419,8 +1423,10 @@ fn pinch_thresholds() -> (f32, f32) {
         (close, open)
     })
 }
-const PINCH_CONFIRM_FRAMES: u32 = 3;
-const PINCH_RELEASE_FRAMES: u32 = 4;
+// The hands arrive about 25 times a second and one sample is shown for two or three display
+// frames, so the waits are times, not frame counts: two samples to grab, four to let go.
+const PINCH_CONFIRM: Duration = Duration::from_millis(80);
+const PINCH_RELEASE: Duration = Duration::from_millis(160);
 const PINCH_LOST_GRACE: Duration = Duration::from_millis(400);
 const PINCH_DEPTH_SMOOTHING: f32 = 0.25; // per frame, against the tracker's depth jitter
 const PANEL_DIST_MIN: f32 = 0.3;
@@ -1511,13 +1517,15 @@ pub fn hand_pinch_grab<O>(
             return; // the panel is gone
         };
         if gap < pinch_thresholds().1 {
-            grab.open_frames = 0;
+            grab.open_since = None;
+            grab.open_gap = 0.0;
         } else if point.is_some() {
-            grab.open_frames += 1;
+            grab.open_since.get_or_insert(now);
+            grab.open_gap = grab.open_gap.max(gap);
         }
         let (keep, seen) = match point {
             None => (now - grab.last_seen < PINCH_LOST_GRACE, false), // lost for a moment: hold on
-            Some(_) if grab.open_frames >= PINCH_RELEASE_FRAMES => (false, false),
+            Some(_) if grab.open_since.is_some_and(|t| now - t >= PINCH_RELEASE) => (false, false),
             Some(p) => {
                 if let (Some(sight), Some(state)) =
                     (sight_frame(&hmd, p), overlay.config.active_state.as_mut())
@@ -1560,23 +1568,38 @@ pub fn hand_pinch_grab<O>(
                 window::save_transform(state, app);
             }
             overlay.config.dirty = true;
-            log::info!("Pinch {hand}: dropped {}", overlay.config.name);
+            let held = now - grab.started;
+            if point.is_none() {
+                log::info!(
+                    "Pinch {hand}: dropped {} after {:.1} s (hand not seen for {} ms)",
+                    overlay.config.name,
+                    held.as_secs_f32(),
+                    PINCH_LOST_GRACE.as_millis()
+                );
+            } else {
+                log::info!(
+                    "Pinch {hand}: dropped {} after {:.1} s (opened to {:.1} cm)",
+                    overlay.config.name,
+                    held.as_secs_f32(),
+                    grab.open_gap * 100.0
+                );
+            }
         }
         return;
     }
 
     // Nothing held: a pinch closed for a few frames over a panel starts a grab.
     let Some(p) = point else {
-        app.input_state.pinch_closed[hand] = 0;
+        app.input_state.pinch_closed[hand] = None;
         return;
     };
     if gap < pinch_thresholds().0 {
-        app.input_state.pinch_closed[hand] += 1;
+        app.input_state.pinch_closed[hand].get_or_insert(now);
     } else {
-        app.input_state.pinch_closed[hand] = 0;
+        app.input_state.pinch_closed[hand] = None;
         return;
     }
-    if app.input_state.pinch_closed[hand] < PINCH_CONFIRM_FRAMES {
+    if app.input_state.pinch_closed[hand].is_none_or(|t| now - t < PINCH_CONFIRM) {
         return;
     }
     let Some(sight) = sight_frame(&hmd, p) else {
@@ -1596,14 +1619,16 @@ pub fn hand_pinch_grab<O>(
         .transform_point3a(state.transform.translation);
     let hand_dist = (p - hmd.translation).length().max(0.05);
     overlay.config.pause_movement = true;
-    app.input_state.pinch_closed[hand] = 0;
+    app.input_state.pinch_closed[hand] = None;
     app.input_state.pinch_grabs[hand] = Some(PinchGrab {
         id,
         panel_in_sight,
         hand_dist,
         depth_factor: 1.0,
-        open_frames: 0,
+        open_since: None,
+        open_gap: 0.0,
         last_seen: now,
+        started: now,
     });
     log::info!("Pinch {hand}: grabbed {}", overlay.config.name);
 }
