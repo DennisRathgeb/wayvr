@@ -334,6 +334,7 @@ pub fn openxr_run(args: &Args, params: RunParams) -> Result<(), BackendError> {
         }
 
         playspace_mover.update(&mut overlays, &mut app);
+        crate::overlays::calibboard::update(&mut app, &mut overlays);
 
         for o in overlays.values_mut() {
             o.after_input(&mut app)?;

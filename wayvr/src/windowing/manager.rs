@@ -125,6 +125,10 @@ where
         let anchor = OverlayWindowData::from_config(create_anchor(app)?);
         me.add(anchor, app);
 
+        // the printed calibration board, drawn where the camera saw it (shown while its pose file is fresh)
+        let calib_board = OverlayWindowData::from_config(crate::overlays::calibboard::create_calib_board(app)?);
+        me.add(calib_board, app);
+
         let watch = OverlayWindowData::from_config(create_watch(app)?);
         me.watch_id = me.add(watch, app);
 

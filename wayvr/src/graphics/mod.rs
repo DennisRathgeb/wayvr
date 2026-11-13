@@ -100,6 +100,9 @@ impl WGfxExtras {
         let shader = crate::shaders::frag_relief::load(gfx.device.clone())?;
         shaders.insert("frag_relief", shader);
 
+        let shader = crate::shaders::frag_checker::load(gfx.device.clone())?;
+        shaders.insert("frag_checker", shader);
+
         let drm_formats = get_drm_formats(gfx.device.clone()).into();
 
         let vertices = [

@@ -68,6 +68,13 @@ pub mod frag_relief {
     }
 }
 
+pub mod frag_checker {
+    vulkano_shaders::shader! {
+        ty: "fragment",
+        path: "src/shaders/checker.frag",
+    }
+}
+
 pub mod frag_screen_key {
     vulkano_shaders::shader! {
         ty: "fragment",

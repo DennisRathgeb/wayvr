@@ -1,4 +1,5 @@
 pub mod anchor;
+pub mod calibboard;
 pub mod custom;
 pub mod dashboard;
 pub mod edit;
