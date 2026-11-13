@@ -1,17 +1,19 @@
 //! Real things in front of a screen hide it: a mask from the glasses' depth map.
 //!
 //! A tracker outside this program publishes a metric depth map of the left tracking camera in
-//! shared memory (`/dev/shm/viture-depth`, block `VDP1`). For a screen, [`mask`] walks a coarse
-//! grid over its quad, puts every grid point into that camera as it stood when the map was
-//! taken, and compares distances: where the room is nearer than the screen, the mask is opaque
-//! black, which is see-through on additive glasses. The screen backend draws the mask over its
-//! picture with the cursor pipeline.
+//! shared memory (`/dev/shm/viture-depth`, block `VDP1`). For a screen, [`mask`] puts every point
+//! of the map into the room as the camera stood when the map was taken, and carries it along
+//! the line from the eye onto the screen: where the room is nearer than the screen on that
+//! line, the mask is opaque black, which is see-through on additive glasses. The screen
+//! backend draws the mask over its picture with the cursor pipeline.
 //!
-//! Off unless `WAYVR_DEPTH_OCCLUSION=1`. The camera's place in the head is read from
-//! `WAYVR_DEPTH_CAMERA` (a JSON file, default `~/.config/xr-desk/depth-camera.json`):
+//! Off unless `WAYVR_DEPTH_OCCLUSION=1`. The camera's place in the head is
+//! `cameras.left.pose_in_head` of the XR desk's calibration store
+//! (`~/.config/xr-desk/calibration.json`), or, without a store, `depth-camera.json` beside it,
+//! or the file named by `WAYVR_DEPTH_CAMERA`; the last two hold the pose alone:
 //! `{"r": [9 numbers, row-major], "t": [3]}` with `p_head = r * p_camera + t`, the camera in
-//! OpenCV axes (x right, y down, z forward), the head in OpenXR view axes. Without the file the
-//! camera sits in the head's origin looking forward. The file is read again when it changes.
+//! OpenCV axes (x right, y down, z forward), the head in OpenXR view axes. Without any of them
+//! the camera sits in the head's origin looking forward. The file is read again when it changes.
 
 use std::{
     collections::VecDeque,
@@ -91,24 +93,35 @@ fn monotonic() -> f64 {
     ts.tv_sec as f64 + ts.tv_nsec as f64 * 1e-9
 }
 
-fn camera_path() -> String {
-    std::env::var("WAYVR_DEPTH_CAMERA").unwrap_or_else(|_| {
-        format!(
-            "{}/.config/xr-desk/depth-camera.json",
-            std::env::var("HOME").unwrap_or_default()
-        )
-    })
+/// The file with the camera's place in the head, and whether it is the calibration store.
+///
+/// `WAYVR_DEPTH_CAMERA` names a file of the plain form; otherwise the XR desk's calibration
+/// store when it exists (`cameras.left.pose_in_head`), otherwise `depth-camera.json`.
+fn camera_path() -> (String, bool) {
+    if let Ok(path) = std::env::var("WAYVR_DEPTH_CAMERA") {
+        return (path, false);
+    }
+    let dir = format!(
+        "{}/.config/xr-desk",
+        std::env::var("HOME").unwrap_or_default()
+    );
+    let store = format!("{dir}/calibration.json");
+    if std::path::Path::new(&store).exists() {
+        (store, true)
+    } else {
+        (format!("{dir}/depth-camera.json"), false)
+    }
 }
 
 fn camera_mtime() -> Option<SystemTime> {
-    std::fs::metadata(camera_path())
+    std::fs::metadata(camera_path().0)
         .and_then(|m| m.modified())
         .ok()
 }
 
 /// The camera's place in the head from the file; None when it is missing or unusable.
 fn load_camera() -> Option<(Mat3A, Vec3A)> {
-    let path = camera_path();
+    let (path, store) = camera_path();
     let Ok(text) = std::fs::read_to_string(&path) else {
         log::warn!("depth occlusion: no {path}");
         return None;
@@ -116,6 +129,11 @@ fn load_camera() -> Option<(Mat3A, Vec3A)> {
     let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else {
         log::warn!("depth occlusion: {path} is not JSON");
         return None;
+    };
+    let v = if store {
+        &v["cameras"]["left"]["pose_in_head"]
+    } else {
+        &v
     };
     let nums = |k: &str| -> Vec<f32> {
         v[k].as_array()
@@ -128,10 +146,10 @@ fn load_camera() -> Option<(Mat3A, Vec3A)> {
     };
     let (r, t) = (nums("r"), nums("t"));
     if r.len() != 9 || t.len() != 3 {
-        log::warn!("depth occlusion: {path} needs r (9) and t (3)");
+        log::warn!("depth occlusion: {path} needs r (9) and t (3) of the left camera");
         return None;
     }
-    log::info!("depth occlusion: camera from {path}");
+    log::info!("depth occlusion: camera from {path}, t = {t:?}");
     Some((
         // row-major in the file, glam wants columns
         Mat3A::from_cols_array(&[r[0], r[3], r[6], r[1], r[4], r[7], r[2], r[5], r[8]]),
@@ -245,17 +263,36 @@ pub fn depth_seq(hmd: &Affine3A) -> u64 {
 /// The mask of one flat screen as RGBA (black, alpha = hidden), `MASK_W` x `MASK_H`.
 ///
 /// `transform` is the screen's pose in the stage space with its size in the axes' lengths,
-/// `aspect` its width over height. None when there is no fresh depth map or nothing is hidden.
-pub fn mask(transform: &Affine3A, aspect: f32) -> Option<Vec<u8>> {
+/// `aspect` its width over height, `eye` the viewer's eye in the stage space. None when there
+/// is no fresh depth map or nothing is hidden.
+///
+/// Every point of the depth map is put into the room (with the head pose of the moment the
+/// map was taken) and carried along the line from the eye through it onto the screen's plane:
+/// where that line reaches the point before the screen, the screen is hidden there. So the
+/// hole sits where the eye sees the thing, not where the camera, which sits beside the eye,
+/// saw it.
+pub fn mask(transform: &Affine3A, aspect: f32, eye: Vec3A) -> Option<Vec<u8>> {
     let st = STATE.lock().ok()?;
     let d = st.depth.as_ref()?;
     if monotonic() - d.t_taken > MAX_AGE {
         return None;
     }
     let head = st.pose_at(d.t_taken)?;
-    // stage -> head as it was -> left camera -> rectified frame of the map
-    let to_head = head.inverse();
-    let to_rect = d.rot * st.cam_r.transpose();
+    mask_of(d, st.cam_r, st.cam_t, &head, transform, aspect, eye)
+}
+
+/// [`mask`] for a given map, camera (head <- camera) and head pose (stage <- head).
+fn mask_of(
+    d: &Depth,
+    cam_r: Mat3A,
+    cam_t: Vec3A,
+    head: &Affine3A,
+    transform: &Affine3A,
+    aspect: f32,
+    eye: Vec3A,
+) -> Option<Vec<u8>> {
+    // rectified frame of the map -> left camera -> head as it was (-> stage with `head`)
+    let from_rect = cam_r * d.rot.transpose();
     let (sx, sy) = if aspect < 1.0 {
         let major = transform.matrix3.x_axis.length();
         (major * aspect, major)
@@ -263,36 +300,145 @@ pub fn mask(transform: &Affine3A, aspect: f32) -> Option<Vec<u8>> {
         let major = transform.matrix3.y_axis.length();
         (major, major / aspect)
     };
-    let right = transform.matrix3.x_axis.normalize_or_zero() * sx;
-    let up = transform.matrix3.y_axis.normalize_or_zero() * sy;
+    if sx < 1e-4 || sy < 1e-4 {
+        return None;
+    }
+    let right = transform.matrix3.x_axis.normalize_or_zero();
+    let up = transform.matrix3.y_axis.normalize_or_zero();
+    let normal = right.cross(up);
+    let centre = transform.translation;
+    let to_plane = normal.dot(centre - eye);
     let (cx, cy) = (d.w as f32 * 0.5, d.h as f32 * 0.5);
+    let (mw, mh) = (MASK_W as i32, MASK_H as i32);
     let mut out = vec![0u8; (MASK_W * MASK_H * 4) as usize];
     let mut any = false;
-    for j in 0..MASK_H {
-        let v = (j as f32 + 0.5) / MASK_H as f32;
-        for i in 0..MASK_W {
-            let u = (i as f32 + 0.5) / MASK_W as f32;
-            let world = transform.translation + right * (u - 0.5) + up * (0.5 - v);
-            let p = to_rect * (to_head.transform_point3a(world) - st.cam_t);
-            if p.z < 0.05 {
+    for py in 0..d.h {
+        for px in 0..d.w {
+            let inv = d.inv[py * d.w + px];
+            if inv <= 2e-3 || inv > 20.0 {
+                continue; // unknown counts as far away; nearer than 5 cm is noise
+            }
+            let z = 1.0 / inv;
+            let in_rect = Vec3A::new(
+                (px as f32 + 0.5 - cx) / d.f * z,
+                (py as f32 + 0.5 - cy) / d.f * z,
+                z,
+            );
+            let ray = head.transform_point3a(from_rect * in_rect + cam_t) - eye;
+            let along = normal.dot(ray);
+            if along.abs() < 1e-6 {
                 continue;
             }
-            let (px, py) = (d.f * p.x / p.z + cx, d.f * p.y / p.z + cy);
-            if px < 0.0 || py < 0.0 || px >= d.w as f32 || py >= d.h as f32 {
+            // the screen is reached at `reach` times the way to the point
+            let reach = to_plane / along;
+            if reach <= 0.0 {
                 continue;
             }
-            let inv = d.inv[py as usize * d.w + px as usize];
-            if inv <= 2e-3 {
-                continue; // unknown counts as far away
+            // 1 where the point is clearly nearer than the screen, soft around equal distance
+            let hidden = 1.0 / (1.0 + (-(reach - 1.0) / SIGMA * 1.7).exp());
+            if hidden <= 0.02 {
+                continue;
             }
-            let room = 1.0 / inv;
-            // 1 where the room is clearly nearer than the screen, soft around equal distance
-            let hidden = 1.0 / (1.0 + (-(p.z - room) / (SIGMA * room) * 1.7).exp());
-            if hidden > 0.02 {
-                out[((j * MASK_W + i) * 4 + 3) as usize] = (hidden * 255.0) as u8;
-                any = true;
+            let hit = ray * reach + eye - centre;
+            let u = hit.dot(right) / sx + 0.5;
+            let v = 0.5 - hit.dot(up) / sy;
+            if !(-0.1..=1.1).contains(&u) || !(-0.1..=1.1).contains(&v) {
+                continue;
+            }
+            // one pixel of the map covers z / f at the point and `reach` times that on the screen
+            let foot = z / d.f * reach * 0.5;
+            let (hu, hv) = (
+                (foot / sx * MASK_W as f32).min(8.0),
+                (foot / sy * MASK_H as f32).min(8.0),
+            );
+            let (fu, fv) = (u * MASK_W as f32, v * MASK_H as f32);
+            let a = (hidden * 255.0) as u8;
+            for j in ((fv - hv).floor() as i32).max(0)..=((fv + hv).floor() as i32).min(mh - 1) {
+                for i in ((fu - hu).floor() as i32).max(0)..=((fu + hu).floor() as i32).min(mw - 1)
+                {
+                    let o = ((j * mw + i) * 4 + 3) as usize;
+                    if a > out[o] {
+                        out[o] = a;
+                        any = true;
+                    }
+                }
             }
         }
     }
     any.then_some(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A map that is far everywhere except a square straight ahead of the camera at `near` m.
+    fn map_with_square(near: f32) -> Depth {
+        let (w, h, f) = (480usize, 288usize, 240.0f32);
+        let mut inv = vec![1.0 / 5.0; w * h];
+        for y in h / 2 - 12..h / 2 + 12 {
+            for x in w / 2 - 12..w / 2 + 12 {
+                inv[y * w + x] = 1.0 / near;
+            }
+        }
+        Depth {
+            count: 2,
+            w,
+            h,
+            t_taken: 0.0,
+            f,
+            rot: Mat3A::IDENTITY,
+            inv,
+        }
+    }
+
+    /// Centre of the hidden part of a mask in metres on the screen (x right, y up), and its area
+    /// in texels.
+    fn hole(mask: &[u8], sx: f32, sy: f32) -> (f32, f32, usize) {
+        let (mut su, mut sv, mut n) = (0.0, 0.0, 0usize);
+        for j in 0..MASK_H {
+            for i in 0..MASK_W {
+                if mask[((j * MASK_W + i) * 4 + 3) as usize] > 128 {
+                    su += (i as f32 + 0.5) / MASK_W as f32 - 0.5;
+                    sv += 0.5 - (j as f32 + 0.5) / MASK_H as f32;
+                    n += 1;
+                }
+            }
+        }
+        (su / n as f32 * sx, sv / n as f32 * sy, n)
+    }
+
+    #[test]
+    fn hole_sits_where_the_eye_sees_the_thing() {
+        // the head in the stage's origin looking along -z; the camera in the head's origin
+        // (OpenCV axes -> OpenXR axes); a screen 1.6 m wide, 1 m ahead, facing the head
+        let cam_r = Mat3A::from_cols(Vec3A::X, Vec3A::NEG_Y, Vec3A::NEG_Z);
+        let head = Affine3A::IDENTITY;
+        let aspect = 16.0 / 9.0;
+        let screen = Affine3A::from_scale_rotation_translation(
+            glam::Vec3::splat(1.6),
+            glam::Quat::IDENTITY,
+            glam::Vec3::new(0.0, 0.0, -1.0),
+        );
+        let d = map_with_square(0.4);
+        let (sx, sy) = (1.6, 1.6 / aspect);
+
+        // seen from the camera itself the square at 0.4 m hides the middle of the screen
+        let m = mask_of(&d, cam_r, Vec3A::ZERO, &head, &screen, aspect, Vec3A::ZERO).unwrap();
+        let (x, y, n) = hole(&m, sx, sy);
+        assert!(x.abs() < 0.01 && y.abs() < 0.01, "from the camera: {x} {y}");
+        // 24 px of 240 px focal length at 0.4 m = 4 cm, 10 cm on the screen: about 12 x 12 texels
+        assert!((100..200).contains(&n), "area {n}");
+
+        // an eye 7 cm to the right and 3 cm above sees it 2.5 times as far the other way
+        let eye = Vec3A::new(0.07, 0.03, 0.0);
+        let m = mask_of(&d, cam_r, Vec3A::ZERO, &head, &screen, aspect, eye).unwrap();
+        let (x, y, _) = hole(&m, sx, sy);
+        assert!((x + 0.105).abs() < 0.012, "x {x}");
+        assert!((y + 0.045).abs() < 0.012, "y {y}");
+
+        // something behind the screen hides nothing
+        let far = map_with_square(1.5);
+        assert!(mask_of(&far, cam_r, Vec3A::ZERO, &head, &screen, aspect, eye).is_none());
+    }
 }

@@ -319,7 +319,15 @@ impl OverlayBackend for ScreenBackend {
             let aspect = self
                 .meta
                 .map_or(16. / 9., |m| m.extent[0] as f32 / m.extent[1] as f32);
-            if let Some(rgba) = mask(&self.world, aspect) {
+            // seen from between the eyes (one mask for both); before the first frame with
+            // eye positions, from the head
+            let eyes = app.input_state.eyes;
+            let eye = if eyes[0] == eyes[1] {
+                app.input_state.hmd.translation
+            } else {
+                (eyes[0] + eyes[1]) * 0.5
+            };
+            if let Some(rgba) = mask(&self.world, aspect, eye) {
                 pipeline.render_occlusion(app, rdr, MASK_W, MASK_H, &rgba)?;
             }
         }
